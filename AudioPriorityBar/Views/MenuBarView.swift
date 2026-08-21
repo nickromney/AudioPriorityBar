@@ -29,9 +29,9 @@ struct MenuBarView: View {
     @State private var selectedTab: DeviceTab = .speaker
     @State private var showingSettings = false
 
-    private let popoverWidth: CGFloat = 480
-    private let listHeight: CGFloat = 480
-    private let gutter: CGFloat = 16
+    private let popoverWidth = PanelMetrics.width
+    private let listHeight: CGFloat = 460
+    private let gutter = PanelMetrics.gutter
 
     var body: some View {
         VStack(spacing: 0) {
@@ -97,31 +97,29 @@ struct MenuBarView: View {
         if audioManager.isEditMode {
             compactDeviceSections
         } else if audioManager.isCustomMode {
-            EnormousDeviceGrid(
+            DeviceCardList(
                 title: "Speakers",
                 icon: "speaker.wave.2.fill",
                 devices: audioManager.speakerDevices,
                 currentDeviceId: audioManager.currentOutputId,
                 category: .speaker,
                 showCategoryPicker: true,
-                onSelect: { audioManager.selectOutputDevice($0, category: .speaker, applyMode: false) },
-                onCycle: { audioManager.cycleOutputPresentation($0, category: .speaker) },
+                onSelect: { audioManager.cycleOutputPresentation($0, category: .speaker, applyMode: false) },
                 onMove: audioManager.moveSpeakerDevice,
                 onHide: { audioManager.hideDevice($0, category: .speaker) }
             )
-            EnormousDeviceGrid(
+            DeviceCardList(
                 title: "Headphones",
                 icon: "headphones",
                 devices: audioManager.headphoneDevices,
                 currentDeviceId: audioManager.currentOutputId,
                 category: .headphone,
                 showCategoryPicker: true,
-                onSelect: { audioManager.selectOutputDevice($0, category: .headphone, applyMode: false) },
-                onCycle: { audioManager.cycleOutputPresentation($0, category: .headphone) },
+                onSelect: { audioManager.cycleOutputPresentation($0, category: .headphone, applyMode: false) },
                 onMove: audioManager.moveHeadphoneDevice,
                 onHide: { audioManager.hideDevice($0, category: .headphone) }
             )
-            EnormousDeviceGrid(
+            DeviceCardList(
                 title: "Microphones",
                 icon: "mic.fill",
                 devices: audioManager.inputDevices,
@@ -131,7 +129,7 @@ struct MenuBarView: View {
                 onHide: { audioManager.hideDevice($0, category: nil) }
             )
         } else {
-            EnormousDeviceGrid(
+            DeviceCardList(
                 icon: selectedTab.icon,
                 devices: selectedTab == .speaker ? audioManager.speakerDevices :
                     (selectedTab == .headphone ? audioManager.headphoneDevices : audioManager.inputDevices),
@@ -142,14 +140,8 @@ struct MenuBarView: View {
                     if selectedTab == .microphone {
                         audioManager.setInputDevice(device)
                     } else {
-                        audioManager.selectOutputDevice(device, category: selectedTab == .speaker ? .speaker : .headphone)
+                        audioManager.cycleOutputPresentation(device, category: selectedTab == .speaker ? .speaker : .headphone)
                     }
-                },
-                onCycle: selectedTab == .microphone ? nil : { device in
-                    audioManager.cycleOutputPresentation(
-                        device,
-                        category: selectedTab == .speaker ? .speaker : .headphone
-                    )
                 },
                 onMove: selectedTab == .speaker ? audioManager.moveSpeakerDevice :
                     (selectedTab == .headphone ? audioManager.moveHeadphoneDevice : audioManager.moveInputDevice),
@@ -221,7 +213,31 @@ struct MenuBarView: View {
     }
 }
 
-struct EnormousDeviceGrid: View {
+/// One shared scale for the whole panel.
+///
+/// The controls had drifted into two unrelated sizes — 23pt emergency buttons
+/// above an 11pt slider — which is what made a working panel look unfinished.
+enum PanelMetrics {
+    static let width: CGFloat = 480
+    static let gutter: CGFloat = 16
+    static let cardRadius: CGFloat = 12
+    static let controlRadius: CGFloat = 10
+    static let cardMinHeight: CGFloat = 60
+    static let controlHeight: CGFloat = 44
+    static let tapTarget: CGFloat = 34
+}
+
+enum PanelType {
+    static let sectionHeader = Font.system(size: 11, weight: .semibold)
+    static let deviceName = Font.system(size: 15, weight: .medium)
+    static let status = Font.system(size: 11)
+    static let control = Font.system(size: 13, weight: .medium)
+    static let emergency = Font.system(size: 15, weight: .semibold)
+}
+
+/// The main surface: one row per device, with selection and mute as two
+/// separate controls.
+struct DeviceCardList: View {
     @EnvironmentObject var audioManager: AudioManager
     var title: String? = nil
     let icon: String
@@ -230,34 +246,33 @@ struct EnormousDeviceGrid: View {
     var category: OutputCategory? = nil
     var showCategoryPicker: Bool = false
     let onSelect: (AudioDevice) -> Void
-    var onCycle: ((AudioDevice) -> Void)? = nil
     var onMove: ((IndexSet, Int) -> Void)? = nil
     var onHide: ((AudioDevice) -> Void)? = nil
 
     @State private var dropTargetUID: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             if let title {
                 HStack(spacing: 6) {
                     Image(systemName: icon)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(PanelType.sectionHeader)
                         .foregroundColor(.accentColor)
                     Text(title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(PanelType.sectionHeader)
                         .foregroundColor(.secondary)
                         .textCase(.uppercase)
-                        .tracking(0.5)
+                        .tracking(0.6)
                 }
             }
 
             if devices.isEmpty {
                 Text("No devices connected")
-                    .font(.system(size: 16))
+                    .font(PanelType.control)
                     .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 100)
+                    .frame(maxWidth: .infinity, minHeight: PanelMetrics.cardMinHeight)
             } else {
-                VStack(spacing: 12) {
+                VStack(spacing: 8) {
                     ForEach(Array(devices.enumerated()), id: \.element.uid) { index, device in
                         deviceCard(index: index, device: device)
                     }
@@ -269,53 +284,64 @@ struct EnormousDeviceGrid: View {
     private func deviceCard(index: Int, device: AudioDevice) -> some View {
         let isSelected = device.id == currentDeviceId
         let isMuted = audioManager.isDeviceMuted(device)
+        let isIgnoringMute = audioManager.isDeviceIgnoringMute(device)
         let isDropTarget = dropTargetUID == device.uid
-        return HStack(spacing: 16) {
-            Image(systemName: cardIcon(for: device, isMuted: isMuted))
-                .font(.system(size: 24))
-                .frame(width: 48)
 
-            DeviceDragHandle(
+        return HStack(spacing: 12) {
+            DeviceRankControl(
                 index: index,
                 uid: device.uid,
-                isLarge: true,
-                foreground: isSelected ? .white : .secondary
+                count: devices.count,
+                foreground: isSelected ? Color.white.opacity(0.85) : .secondary,
+                onMove: onMove
             )
 
-            Text(device.name)
-                .font(.system(size: 15, weight: .semibold))
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(device.name)
+                    .font(PanelType.deviceName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                if let status = statusText(isSelected: isSelected, isMuted: isMuted, isIgnoringMute: isIgnoringMute) {
+                    Text(status)
+                        .font(PanelType.status)
+                        .lineLimit(1)
+                        .foregroundStyle(statusTint(isSelected: isSelected, isIgnoringMute: isIgnoringMute))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if isSelected {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 22))
+                    .font(.system(size: 16))
             }
+
+            muteButton(for: device, isMuted: isMuted, isIgnoringMute: isIgnoringMute, isSelected: isSelected)
         }
         .foregroundColor(isSelected ? .white : .primary)
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, minHeight: PanelMetrics.cardMinHeight, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(isSelected ? Color.accentColor : Color.primary.opacity(0.08))
+            RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
+                .fill(isSelected ? Color.accentColor : Color.primary.opacity(0.06))
         )
         .overlay(alignment: .top) {
             if isDropTarget {
                 DropIndicatorLine()
                     .padding(.horizontal, 8)
-                    .offset(y: -8)
+                    .offset(y: -6)
             }
         }
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
                 .stroke(isDropTarget ? Color.accentColor : Color.clear, lineWidth: 2)
         )
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            onCycle?(device)
-        }
-        .onTapGesture(count: 1) {
+        // One plain single click per state change. A double-click gesture used
+        // to sit on top of this one and fire it first, so muting a device also
+        // reselected it — the interaction that felt broken.
+        .onTapGesture {
             onSelect(device)
         }
         .dropDestination(for: String.self) { items, _ in
@@ -335,14 +361,60 @@ struct EnormousDeviceGrid: View {
     }
 
     private func cardHelp(isSelected: Bool, isMuted: Bool) -> String {
-        guard onCycle != nil else { return "Click to listen. Drag the numbered handle to reorder." }
-        if !isSelected {
-            return "Click to listen. Double-click cycles mute, then switch away."
+        if !isSelected { return "Click to make this the output, silent at first." }
+        if isMuted { return "Click to unmute. Click again to hand over to the next device." }
+        return "Click to hand over to the next device. The speaker icon mutes this one."
+    }
+
+    /// Muting a device is its own control so it never has to fight with
+    /// selecting one.
+    private func muteButton(for device: AudioDevice, isMuted: Bool, isIgnoringMute: Bool, isSelected: Bool) -> some View {
+        Button {
+            audioManager.toggleMute(for: device)
+        } label: {
+            Image(systemName: muteGlyph(for: device, isMuted: isMuted, isIgnoringMute: isIgnoringMute))
+                .font(.system(size: 14))
+                .frame(width: PanelMetrics.tapTarget, height: PanelMetrics.tapTarget)
+                .background(
+                    Circle().fill(isSelected ? Color.white.opacity(0.18) : Color.primary.opacity(0.07))
+                )
+                .foregroundStyle(muteTint(isMuted: isMuted, isIgnoringMute: isIgnoringMute, isSelected: isSelected))
+                .contentShape(Circle())
         }
+        .buttonStyle(.plain)
+        .disabled(!device.isConnected)
+        .help(muteHelp(isMuted: isMuted, isIgnoringMute: isIgnoringMute))
+    }
+
+    private func muteGlyph(for device: AudioDevice, isMuted: Bool, isIgnoringMute: Bool) -> String {
+        if isIgnoringMute { return "exclamationmark.triangle.fill" }
         if isMuted {
-            return "Muted. Double-click to switch to another device."
+            return device.type == .input ? "mic.slash.fill" : "speaker.slash.fill"
         }
-        return "Click to listen. Double-click to mute."
+        return device.type == .input ? "mic.fill" : "speaker.wave.2.fill"
+    }
+
+    private func muteTint(isMuted: Bool, isIgnoringMute: Bool, isSelected: Bool) -> Color {
+        if isIgnoringMute { return .orange }
+        if isMuted { return isSelected ? .white : .red }
+        return isSelected ? .white : .secondary
+    }
+
+    private func muteHelp(isMuted: Bool, isIgnoringMute: Bool) -> String {
+        if isIgnoringMute { return "This device ignored the mute. Use its own volume control." }
+        return isMuted ? "Unmute this device" : "Mute this device"
+    }
+
+    private func statusText(isSelected: Bool, isMuted: Bool, isIgnoringMute: Bool) -> String? {
+        if isIgnoringMute { return "Still playing — use its own controls" }
+        if isMuted { return "Muted" }
+        if isSelected { return "Listening" }
+        return nil
+    }
+
+    private func statusTint(isSelected: Bool, isIgnoringMute: Bool) -> Color {
+        if isIgnoringMute { return .orange }
+        return isSelected ? Color.white.opacity(0.85) : .secondary
     }
 
     private func drop(_ uids: [String], onto device: AudioDevice) -> Bool {
@@ -356,45 +428,23 @@ struct EnormousDeviceGrid: View {
         onMove(move.from, move.to)
         return true
     }
-
-    private func cardIcon(for device: AudioDevice, isMuted: Bool) -> String {
-        if isMuted {
-            return device.type == .input ? "mic.slash.fill" : "speaker.slash.fill"
-        }
-        return icon
-    }
 }
 
+/// The panic button. Sized to be hit without aiming, but no longer shouting
+/// over the rest of the panel.
 struct MuteAllButton: View {
     @EnvironmentObject var audioManager: AudioManager
 
     var body: some View {
-        Button {
+        EmergencyButton(
+            title: audioManager.areAllOutputsMuted ? "Unmute All Output" : "Mute All Output",
+            systemImage: audioManager.areAllOutputsMuted ? "speaker.slash.fill" : "speaker.wave.3.fill",
+            tint: audioManager.areAllOutputsMuted ? .green : .red,
+            isDisabled: audioManager.allConnectedOutputDevices.isEmpty
+        ) {
             audioManager.setAllOutputsMuted(!audioManager.areAllOutputsMuted)
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: audioManager.areAllOutputsMuted ? "speaker.slash.fill" : "speaker.wave.3.fill")
-                    .font(.system(size: 25, weight: .bold))
-                    .frame(width: 32, height: 30)
-
-                Text(audioManager.areAllOutputsMuted ? "Unmute All Output" : "Mute All Output")
-                    .font(.system(size: 23, weight: .bold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 22)
-            .frame(maxWidth: .infinity, minHeight: 76)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(audioManager.areAllOutputsMuted ? Color.green : Color.red)
-            )
         }
-        .buttonStyle(.plain)
         .animation(nil, value: audioManager.areAllOutputsMuted)
-        .disabled(audioManager.allConnectedOutputDevices.isEmpty)
-        .help(audioManager.areAllOutputsMuted ? "Unmute all output" : "Mute all output")
     }
 }
 
@@ -406,55 +456,99 @@ struct MuteMicrophonesButton: View {
     }
 
     var body: some View {
-        Button {
+        EmergencyButton(
+            title: audioManager.areAllInputsMuted ? "Unmute All Microphones" : "Mute All Microphones",
+            systemImage: Self.iconName(isMuted: audioManager.areAllInputsMuted),
+            tint: audioManager.areAllInputsMuted ? .green : .orange,
+            isDisabled: audioManager.allConnectedInputDevices.isEmpty
+        ) {
             audioManager.setAllInputsMuted(!audioManager.areAllInputsMuted)
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: Self.iconName(isMuted: audioManager.areAllInputsMuted))
-                    .font(.system(size: 25, weight: .bold))
-                    .frame(width: 32, height: 30)
-
-                Text(audioManager.areAllInputsMuted ? "Unmute All Microphones" : "Mute All Microphones")
-                    .font(.system(size: 23, weight: .bold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 22)
-            .frame(maxWidth: .infinity, minHeight: 76)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(audioManager.areAllInputsMuted ? Color.green : Color.orange)
-            )
         }
-        .buttonStyle(.plain)
-        .disabled(audioManager.allConnectedInputDevices.isEmpty)
-        .help(audioManager.areAllInputsMuted ? "Unmute all microphones" : "Mute all microphones")
     }
 }
 
+private struct EmergencyButton: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+    var isDisabled: Bool = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 20)
+
+                Text(title)
+                    .font(PanelType.emergency)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: PanelMetrics.controlHeight)
+            .background(
+                RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
+                    .fill(tint.opacity(isHovering ? 1 : 0.9))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .opacity(isDisabled ? 0.4 : 1)
+        .disabled(isDisabled)
+        .onHover { isHovering = $0 }
+        .help(title)
+    }
+}
+
+/// Says what is actually happening, including the case the app cannot fix:
+/// hardware that was told to mute and kept playing.
 struct OutputMuteStatusView: View {
     @EnvironmentObject var audioManager: AudioManager
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             Circle()
-                .fill(audioManager.allConnectedOutputDevices.isEmpty ? Color.secondary : (audioManager.areAllOutputsMuted ? Color.red : Color.green))
-                .frame(width: 12, height: 12)
+                .fill(indicatorColor)
+                .frame(width: 8, height: 8)
 
             Text(statusText)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.secondary)
+                .font(PanelType.status)
+                .foregroundColor(audioManager.outputsIgnoringMute.isEmpty ? .secondary : .orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .truncationMode(.tail)
 
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+        .help(statusText)
+    }
+
+    private var indicatorColor: Color {
+        if audioManager.allConnectedOutputDevices.isEmpty { return .secondary }
+        if audioManager.redirectedOutputName != nil { return .red }
+        if !audioManager.outputsIgnoringMute.isEmpty { return .orange }
+        return audioManager.areAllOutputsMuted ? .red : .green
     }
 
     private var statusText: String {
         if audioManager.allConnectedOutputDevices.isEmpty {
             return "No output connected"
+        }
+        if let redirected = audioManager.redirectedOutputName {
+            return "Muted — audio moved to \(redirected) to guarantee silence"
+        }
+        let ignoring = audioManager.outputsIgnoringMute
+        if !ignoring.isEmpty {
+            let names = ignoring.joined(separator: ", ")
+            return "\(names) ignored the mute — use its own volume control"
         }
         return audioManager.areAllOutputsMuted ? "Output is muted" : "Output is live"
     }
@@ -485,20 +579,20 @@ struct SettingsPanel: View {
             }
 
             SettingsToggleRow(
+                title: "Switch to built-in output to mute",
+                subtitle: "Some displays and audio interfaces ignore mute. Mute All moves audio to the built-in speakers and mutes those instead, then hands it back when you unmute.",
+                isOn: Binding(
+                    get: { audioManager.redirectMuteAllToBuiltIn },
+                    set: { audioManager.setRedirectMuteAllToBuiltIn($0) }
+                )
+            )
+
+            SettingsToggleRow(
                 title: "Remember volume per device",
                 subtitle: "Restore each device’s last level when you switch",
                 isOn: Binding(
                     get: { audioManager.perDeviceLevelsEnabled },
                     set: { audioManager.setPerDeviceLevelsEnabled($0) }
-                )
-            )
-
-            SettingsToggleRow(
-                title: "Keep muted when switching",
-                subtitle: "Stay muted when you select another speaker or headphone. Off means the device you pick comes up live.",
-                isOn: Binding(
-                    get: { audioManager.keepMutedWhenChangingSelection },
-                    set: { audioManager.setKeepMutedWhenChangingSelection($0) }
                 )
             )
 
@@ -706,18 +800,17 @@ struct ModeToggleView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: tab.icon)
-                            .font(.system(size: 18))
+                            .font(.system(size: 13))
                         Text(tab.label)
-                            .font(.system(size: 17, weight: .medium))
+                            .font(PanelType.control)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 17)
-                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, minHeight: 32)
                     .contentShape(Rectangle())
                     .background(
-                        RoundedRectangle(cornerRadius: 10)
+                        RoundedRectangle(cornerRadius: PanelMetrics.controlRadius, style: .continuous)
                             .fill(isSelected ? Color.accentColor : Color.clear)
                     )
                     .foregroundColor(isSelected ? .white : .secondary)
@@ -732,12 +825,12 @@ struct ModeToggleView: View {
                 }
             } label: {
                 Image(systemName: "hand.raised.fill")
-                    .font(.system(size: 18))
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 17)
+                    .font(.system(size: 13))
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 32)
                     .contentShape(Rectangle())
                     .background(
-                        RoundedRectangle(cornerRadius: 10)
+                        RoundedRectangle(cornerRadius: PanelMetrics.controlRadius, style: .continuous)
                             .fill(audioManager.isCustomMode ? Color.orange : Color.clear)
                     )
                     .foregroundColor(audioManager.isCustomMode ? .white : .secondary)
@@ -747,9 +840,9 @@ struct ModeToggleView: View {
             .accessibilityLabel("Manual")
         }
         .padding(4)
-        .frame(height: 70)
+        .frame(height: PanelMetrics.controlHeight)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
                 .fill(Color.primary.opacity(0.05))
         )
         .animation(.easeInOut(duration: 0.2), value: audioManager.currentMode)
@@ -769,7 +862,9 @@ struct VolumeSliderView: View {
     }
 
     var isMuted: Bool {
-        VolumeSliderView.showsMutedIcon(volume: audioManager.volume)
+        // The app's own mute state comes first: a device that is muted but
+        // parked at a non-zero level should still read as muted here.
+        audioManager.isActiveOutputMuted || VolumeSliderView.showsMutedIcon(volume: audioManager.volume)
     }
 
     static func showsMutedIcon(volume: Float) -> Bool {

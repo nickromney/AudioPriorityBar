@@ -52,6 +52,7 @@ class PriorityManager {
     private let defaultOutputCategoryKey = "defaultOutputCategory"
     private let enormousModeKey = "enormousMode"
     private let keepMutedWhenChangingSelectionKey = "keepMutedWhenChangingSelection"
+    private let redirectMuteAllToBuiltInKey = "redirectMuteAllToBuiltIn"
 
     // MARK: - Known Devices (Persistent Memory)
 
@@ -163,6 +164,16 @@ class PriorityManager {
             return defaults.bool(forKey: deviceLevelsEnabledKey)
         }
         set { defaults.set(newValue, forKey: deviceLevelsEnabledKey) }
+    }
+
+    /// On by default: without it, Mute All cannot promise silence on hardware
+    /// that ignores CoreAudio.
+    var redirectMuteAllToBuiltIn: Bool {
+        get {
+            guard defaults.object(forKey: redirectMuteAllToBuiltInKey) != nil else { return true }
+            return defaults.bool(forKey: redirectMuteAllToBuiltInKey)
+        }
+        set { defaults.set(newValue, forKey: redirectMuteAllToBuiltInKey) }
     }
 
     var keepMutedWhenChangingSelection: Bool {
@@ -370,14 +381,28 @@ class PriorityManager {
         defaults.set(values, forKey: key)
     }
 
+    /// Applies a new order for the devices on screen without losing the place
+    /// of ones that are stored but not currently listed (disconnected devices,
+    /// or devices hidden from this category).
+    ///
+    /// Devices in both lists take their order from `visible` — that is what
+    /// makes a reorder stick. Stored-only devices keep their slot, and devices
+    /// that are new to the list join the end.
     private func mergedPriorityOrder(existing: [String], visible: [String]) -> [String] {
         guard !existing.isEmpty else { return visible }
-        var remaining = visible
-        var result = existing.map { uid -> String in
-            guard let index = remaining.firstIndex(of: uid) else { return uid }
-            return remaining.remove(at: index)
+        let existingSet = Set(existing)
+        var reordered = visible.filter { existingSet.contains($0) }[...]
+
+        var result: [String] = []
+        result.reserveCapacity(existing.count + visible.count)
+        for uid in existing {
+            if visible.contains(uid), let next = reordered.popFirst() {
+                result.append(next)
+            } else {
+                result.append(uid)
+            }
         }
-        result.append(contentsOf: remaining)
+        result.append(contentsOf: visible.filter { !existingSet.contains($0) })
         return result
     }
 

@@ -311,6 +311,67 @@ struct DraggableDeviceRow: View {
     }
 }
 
+/// Position control for a device row.
+///
+/// Drag still works when the app happens to be active, but a `MenuBarExtra`
+/// popover does not activate the app, and AppKit drag sessions started from an
+/// inactive window are unreliable — which is why reordering by dragging alone
+/// kept failing. The arrows are a plain click and cannot be swallowed.
+struct DeviceRankControl: View {
+    let index: Int
+    let uid: String
+    let count: Int
+    var foreground: Color = .secondary
+    var onMove: ((IndexSet, Int) -> Void)?
+
+    @State private var isHovering = false
+
+    private var canMoveUp: Bool { onMove != nil && index > 0 }
+    private var canMoveDown: Bool { onMove != nil && index < count - 1 }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            arrow("chevron.up", enabled: canMoveUp) {
+                if let move = DeviceReorder.moveUp(index: index, count: count) {
+                    onMove?(move.from, move.to)
+                }
+            }
+
+            Text("\(index + 1)")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(foreground)
+                .frame(maxHeight: .infinity)
+
+            arrow("chevron.down", enabled: canMoveDown) {
+                if let move = DeviceReorder.moveDown(index: index, count: count) {
+                    onMove?(move.from, move.to)
+                }
+            }
+        }
+        .frame(width: 26, height: 46)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(isHovering ? 0.14 : 0.08))
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .help("Use the arrows to reorder, or drag this handle")
+        .draggable(uid)
+    }
+
+    private func arrow(_ systemName: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 9, weight: .bold))
+                .frame(width: 26, height: 13)
+                .contentShape(Rectangle())
+                .foregroundStyle(foreground.opacity(enabled ? (isHovering ? 1 : 0.55) : 0.15))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+}
+
 struct DeviceDragHandle: View {
     let index: Int
     let uid: String

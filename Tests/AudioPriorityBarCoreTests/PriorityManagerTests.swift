@@ -87,3 +87,37 @@ final class PriorityManagerTests: XCTestCase {
         XCTAssertFalse(manager.keepMutedWhenChangingSelection)
     }
 }
+
+extension PriorityManagerTests {
+    func testReorderingVisibleDevicesPersists() {
+        let a = AudioDevice(id: 1, uid: "a", name: "A", type: .output)
+        let b = AudioDevice(id: 2, uid: "b", name: "B", type: .output)
+        let c = AudioDevice(id: 3, uid: "c", name: "C", type: .output)
+        manager.savePriorities([a, b, c], category: .speaker)
+
+        // Move C up one place, the way the row arrows do.
+        manager.savePriorities([a, c, b], category: .speaker)
+
+        XCTAssertEqual(
+            manager.sortByPriority([a, b, c], category: .speaker).map(\.uid),
+            ["a", "c", "b"],
+            "a reorder that does not survive the next refresh is not a reorder"
+        )
+    }
+
+    func testReorderingKeepsADisconnectedDeviceInItsSlot() {
+        let a = AudioDevice(id: 1, uid: "a", name: "A", type: .output)
+        let gone = AudioDevice(id: 2, uid: "gone", name: "Gone", type: .output)
+        let b = AudioDevice(id: 3, uid: "b", name: "B", type: .output)
+        let c = AudioDevice(id: 4, uid: "c", name: "C", type: .output)
+        manager.savePriorities([a, gone, b, c], category: .speaker)
+
+        // "gone" is no longer connected, so it is not on screen to be reordered.
+        manager.savePriorities([a, c, b], category: .speaker)
+
+        XCTAssertEqual(
+            manager.sortByPriority([a, gone, b, c], category: .speaker).map(\.uid),
+            ["a", "gone", "c", "b"]
+        )
+    }
+}

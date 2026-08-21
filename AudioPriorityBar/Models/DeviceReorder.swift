@@ -19,4 +19,16 @@ enum DeviceReorder {
               let destination = destination(draggingUID: draggingUID, ontoUID: ontoUID, in: uids) else { return nil }
         return (IndexSet(integer: from), destination)
     }
+
+    /// One step up the list. `Array.move(fromOffsets:toOffset:)` counts the
+    /// destination in the pre-move array, so moving down needs `index + 2`.
+    static func moveUp(index: Int, count: Int) -> (from: IndexSet, to: Int)? {
+        guard index > 0, index < count else { return nil }
+        return (IndexSet(integer: index), index - 1)
+    }
+
+    static func moveDown(index: Int, count: Int) -> (from: IndexSet, to: Int)? {
+        guard index >= 0, index < count - 1 else { return nil }
+        return (IndexSet(integer: index), index + 2)
+    }
 }

@@ -51,6 +51,10 @@ struct AudioDevice: Identifiable, Equatable, Hashable {
     let name: String
     let type: AudioDeviceType
     var isConnected: Bool = true
+    /// The Mac's own speakers or headphone jack. Always present and always
+    /// mutable through CoreAudio, which makes it the reliable place to send
+    /// audio when the device you are on refuses to go quiet.
+    var isBuiltIn: Bool = false
 
     var isValid: Bool {
         id != kAudioObjectUnknown
