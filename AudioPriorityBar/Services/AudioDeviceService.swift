@@ -2,7 +2,38 @@ import Foundation
 import CoreAudio
 import AudioToolbox
 
-class AudioDeviceService {
+/// The CoreAudio boundary used by `AudioManager`.
+///
+/// Keeping this interface small makes the stateful manager testable without
+/// touching the user's actual audio devices.
+protocol AudioDeviceServicing: AnyObject {
+    var onDevicesChanged: (() -> Void)? { get set }
+    var onMuteOrVolumeChanged: (() -> Void)? { get set }
+
+    func getDevices() -> [AudioDevice]
+    func getCurrentDefaultDevice(type: AudioDeviceType) -> AudioObjectID?
+    func setDefaultDevice(_ deviceId: AudioObjectID, type: AudioDeviceType)
+    func getOutputVolume() -> Float
+    func setOutputVolume(_ volume: Float, force: Bool)
+    func getInputVolume() -> Float
+    func setInputVolume(_ volume: Float, force: Bool)
+    func getDeviceVolume(_ deviceId: AudioObjectID, type: AudioDeviceType) -> Float
+    func setDeviceVolume(_ volume: Float, deviceId: AudioObjectID, type: AudioDeviceType, force: Bool) -> Bool
+    func supportsDeviceVolumeControl(_ deviceId: AudioObjectID, type: AudioDeviceType) -> Bool
+    func isDeviceMuted(_ deviceId: AudioObjectID, type: AudioDeviceType) -> Bool
+    func setDeviceMuted(_ muted: Bool, deviceId: AudioObjectID, type: AudioDeviceType) -> Bool
+    func startListening()
+}
+
+extension AudioDeviceServicing {
+    func setOutputVolume(_ volume: Float) { setOutputVolume(volume, force: false) }
+    func setInputVolume(_ volume: Float) { setInputVolume(volume, force: false) }
+    func getDeviceVolume(_ deviceId: AudioObjectID) -> Float {
+        getDeviceVolume(deviceId, type: .output)
+    }
+}
+
+class AudioDeviceService: AudioDeviceServicing {
     var onDevicesChanged: (() -> Void)?
     var onMuteOrVolumeChanged: (() -> Void)?
 

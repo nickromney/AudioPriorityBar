@@ -24,10 +24,24 @@ enum DeviceTab: Hashable {
     }
 }
 
+enum MenuBarPresentation {
+    case menuBar
+    case workspace
+}
+
 struct MenuBarView: View {
     @EnvironmentObject var audioManager: AudioManager
+    let presentation: MenuBarPresentation
     @State private var selectedTab: DeviceTab = .speaker
     @State private var showingSettings = false
+
+    init(presentation: MenuBarPresentation = .menuBar) {
+        self.presentation = presentation
+    }
+
+    private var usesLargeLayout: Bool {
+        presentation == .workspace || audioManager.isEnormousMode
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,7 +74,7 @@ struct MenuBarView: View {
 
             ScrollView {
                 VStack(spacing: 20) {
-                    if audioManager.isEnormousMode {
+                    if usesLargeLayout {
                         EnormousDeviceGrid(
                             icon: selectedTab.icon,
                             devices: selectedTab == .speaker ? audioManager.speakerDevices :
@@ -138,7 +152,7 @@ struct MenuBarView: View {
             // Keep the popover geometry stable while switching tabs. The list
             // scrolls inside this fixed-height viewport instead of resizing the
             // menu-bar window around each tab's content.
-            .frame(height: audioManager.isEnormousMode ? enormousDeviceListHeight : 420)
+            .frame(height: usesLargeLayout ? enormousDeviceListHeight : 420)
 
             Divider()
                 .padding(.horizontal, 12)
@@ -173,6 +187,18 @@ struct MenuBarView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
+
+                    if presentation == .menuBar {
+                        Button {
+                            WorkspaceWindowController.shared.show(audioManager: audioManager)
+                        } label: {
+                            Label("Open Large Window", systemImage: "macwindow.on.rectangle")
+                                .font(.system(size: 12, weight: .medium))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.secondary)
+                    }
                 }
 
                 HStack(spacing: 10) {
@@ -214,7 +240,7 @@ struct MenuBarView: View {
             .animation(.easeInOut(duration: 0.2), value: audioManager.isEditMode)
 
             if !showingSettings {
-                if audioManager.isEnormousMode {
+                if usesLargeLayout {
                     VStack(spacing: 12) {
                         OutputMuteStatusView()
                         MuteAllButton()
@@ -229,7 +255,7 @@ struct MenuBarView: View {
                 }
             }
         }
-        .frame(width: audioManager.isEnormousMode ? 560 : 340)
+        .frame(width: usesLargeLayout ? 560 : 340)
         .onAppear {
             selectedTab = audioManager.defaultOutputCategory == .headphone ? .headphone : .speaker
         }
@@ -244,7 +270,7 @@ struct MenuBarView: View {
     }
 
     private var enormousDeviceListHeight: CGFloat {
-        guard audioManager.isEnormousMode else { return 420 }
+        guard usesLargeLayout else { return 420 }
 
         // Size from the largest category, not the selected tab. This keeps
         // the emergency controls anchored while switching between tabs.
@@ -358,12 +384,16 @@ struct MuteAllButton: View {
 struct MuteMicrophonesButton: View {
     @EnvironmentObject var audioManager: AudioManager
 
+    static func iconName(isMuted: Bool) -> String {
+        isMuted ? "mic.slash.fill" : "mic.fill"
+    }
+
     var body: some View {
         Button {
             audioManager.setAllInputsMuted(!audioManager.areAllInputsMuted)
         } label: {
             HStack(spacing: 14) {
-                Image(systemName: audioManager.areAllInputsMuted ? "mic.slash.fill" : "mic.fill")
+                Image(systemName: Self.iconName(isMuted: audioManager.areAllInputsMuted))
                     .font(.system(size: 25, weight: .bold))
                     .frame(width: 32, height: 30)
 

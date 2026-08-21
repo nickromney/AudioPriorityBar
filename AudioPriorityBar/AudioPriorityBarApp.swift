@@ -1,6 +1,7 @@
 import SwiftUI
 import CoreAudio
 import AVFoundation
+import AppKit
 import Darwin
 
 /// Menu-bar apps can be launched from multiple copies on disk. Bundle IDs do
@@ -35,6 +36,35 @@ final class SingleInstanceGuard {
     }
 }
 
+@MainActor
+final class WorkspaceWindowController {
+    static let shared = WorkspaceWindowController()
+
+    private var window: NSWindow?
+
+    func show(audioManager: AudioManager) {
+        if let window {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let contentView = MenuBarView(presentation: .workspace)
+            .environmentObject(audioManager)
+        let hostingController = NSHostingController(rootView: contentView)
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "AudioPriorityBar"
+        window.setContentSize(NSSize(width: 560, height: 760))
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.isReleasedWhenClosed = false
+        window.center()
+        self.window = window
+
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+}
+
 @main
 struct AudioPriorityBarApp: App {
     @StateObject private var audioManager: AudioManager
@@ -50,12 +80,13 @@ struct AudioPriorityBarApp: App {
     
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView()
+            MenuBarView(presentation: .menuBar)
                 .environmentObject(audioManager)
         } label: {
             Image(systemName: "speaker.wave.2.fill")
         }
         .menuBarExtraStyle(.window)
+
     }
 }
 
@@ -136,13 +167,13 @@ class AudioManager: ObservableObject {
     @Published var micFlashState: Bool = false
     @Published var isEnormousMode: Bool
 
-    private let deviceService = AudioDeviceService()
+    private let deviceService: any AudioDeviceServicing
     private var micFlashTimer: Timer?
     private var softwareMutedInputKeys: Set<String> = []
     private var softwareMutedOutputKeys: Set<String> = []
     private var savedInputVolumes: [String: Float] = [:]
     private var savedOutputVolumes: [String: Float] = [:]
-    let priorityManager = PriorityManager()
+    let priorityManager: PriorityManager
     private var connectedDeviceUIDs: Set<String> = []
 
     var menuBarIcon: String {
@@ -216,12 +247,12 @@ class AudioManager: ObservableObject {
         }
         mutedDeviceKeys = muted.union(softwareMutedInputKeys).union(softwareMutedOutputKeys)
         if let outputId = currentOutputId {
-            isActiveOutputMuted = muted.contains { $0 == "output:\(outputId)" }
+            isActiveOutputMuted = mutedDeviceKeys.contains("output:\(outputId)")
         } else {
             isActiveOutputMuted = false
         }
         if let inputId = currentInputId {
-            isActiveInputMuted = muted.contains { $0 == "input:\(inputId)" }
+            isActiveInputMuted = mutedDeviceKeys.contains("input:\(inputId)")
         } else {
             isActiveInputMuted = false
         }
@@ -312,9 +343,11 @@ class AudioManager: ObservableObject {
                 }
             } else {
                 _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: .output)
-                if let savedVolume = savedOutputVolumes.removeValue(forKey: key) {
-                    _ = deviceService.setDeviceVolume(savedVolume, deviceId: device.id, type: .output, force: true)
-                }
+                let savedVolume = savedOutputVolumes.removeValue(forKey: key)
+                let currentVolume = deviceService.getDeviceVolume(device.id, type: .output)
+                let restoredVolume = savedVolume
+                    ?? (currentVolume > 0.01 ? currentVolume : max(volume, 0.5))
+                _ = deviceService.setDeviceVolume(restoredVolume, deviceId: device.id, type: .output, force: true)
                 softwareMutedOutputKeys.remove(key)
             }
         }
@@ -351,7 +384,12 @@ class AudioManager: ObservableObject {
         }
     }
 
-    init() {
+    init(
+        deviceService: any AudioDeviceServicing = AudioDeviceService(),
+        priorityManager: PriorityManager = PriorityManager()
+    ) {
+        self.deviceService = deviceService
+        self.priorityManager = priorityManager
         currentMode = priorityManager.currentMode
         isCustomMode = priorityManager.isCustomMode
         perDeviceLevelsEnabled = priorityManager.areDeviceLevelsEnabled
@@ -687,9 +725,13 @@ class AudioManager: ObservableObject {
         
         // Detect newly connected devices
         let newlyConnectedUIDs = connectedDeviceUIDs.subtracting(oldConnectedUIDs)
+        let disconnectedUIDs = oldConnectedUIDs.subtracting(connectedDeviceUIDs)
         previousConnectedUIDs = connectedDeviceUIDs
-        
-        if !isCustomMode {
+
+        // A default-device notification also arrives when the user selects a
+        // device. Only reapply priority after an actual connection change;
+        // otherwise the listener immediately overwrites the user's choice.
+        if !isCustomMode && (!newlyConnectedUIDs.isEmpty || !disconnectedUIDs.isEmpty) {
             // Auto-switch mode only when a new headphone connects or all headphones disconnect
             autoSwitchModeIfNeeded(newlyConnectedUIDs: newlyConnectedUIDs)
             applyHighestPriorityInput()

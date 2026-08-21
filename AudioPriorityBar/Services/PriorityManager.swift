@@ -32,7 +32,11 @@ struct StoredDevice: Codable, Equatable {
 }
 
 class PriorityManager {
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     private let inputPrioritiesKey = "inputPriorities"
     private let speakerPrioritiesKey = "speakerPriorities"
