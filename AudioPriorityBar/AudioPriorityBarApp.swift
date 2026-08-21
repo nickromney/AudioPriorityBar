@@ -1,9 +1,88 @@
 import SwiftUI
 import CoreAudio
+import AVFoundation
+import AppKit
+import Darwin
+
+/// Menu-bar apps can be launched from multiple copies on disk. Bundle IDs do
+/// not prevent that, so keep an OS-level lock for the lifetime of this process.
+final class SingleInstanceGuard {
+    static let shared = SingleInstanceGuard()
+
+    private var fileDescriptor: Int32 = -1
+
+    private init() {}
+
+    func acquire() -> Bool {
+        guard fileDescriptor == -1 else { return true }
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AudioPriorityBar.instance.lock")
+            .path
+        let descriptor = open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { return false }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            close(descriptor)
+            return false
+        }
+        fileDescriptor = descriptor
+        return true
+    }
+
+    deinit {
+        release()
+    }
+
+    func release() {
+        guard fileDescriptor >= 0 else { return }
+        flock(fileDescriptor, LOCK_UN)
+        close(fileDescriptor)
+        fileDescriptor = -1
+    }
+}
+
+enum RunContext {
+    /// The test bundle is hosted by this very app, so the single-instance lock
+    /// would see the user's running copy and exit before a single test could
+    /// run. That is the "Could not launch AudioPriorityBarTests" failure.
+    static var isRunningTests: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || environment["XCTestSessionIdentifier"] != nil
+    }
+}
+
+enum AppProcess {
+    static func relaunchConfiguration() -> NSWorkspace.OpenConfiguration {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = true
+        return configuration
+    }
+
+    static func relaunch() {
+        let bundleURL = Bundle.main.bundleURL
+        SingleInstanceGuard.shared.release()
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: relaunchConfiguration()) { _, _ in
+            DispatchQueue.main.async {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+    }
+}
 
 @main
 struct AudioPriorityBarApp: App {
-    @StateObject private var audioManager = AudioManager()
+    @StateObject private var audioManager: AudioManager
+
+    init() {
+        guard RunContext.isRunningTests || SingleInstanceGuard.shared.acquire() else {
+            // Another copy already owns the menu-bar slot. Exit quietly so a
+            // second app bundle cannot leave a confusing duplicate icon.
+            exit(EXIT_SUCCESS)
+        }
+        _audioManager = StateObject(wrappedValue: AudioManager())
+    }
     
     var body: some Scene {
         MenuBarExtra {
@@ -13,6 +92,7 @@ struct AudioPriorityBarApp: App {
             Image(systemName: "speaker.wave.2.fill")
         }
         .menuBarExtraStyle(.window)
+
     }
 }
 
@@ -81,54 +161,110 @@ class AudioManager: ObservableObject {
     @Published var currentOutputId: AudioObjectID?
     @Published var currentMode: OutputCategory = .speaker
     @Published var volume: Float = 0
+    @Published var inputGain: Float = 0
+    @Published var perDeviceLevelsEnabled: Bool
     @Published var isEditMode: Bool = false
     @Published var isCustomMode: Bool = false
-    @Published var mutedDeviceIds: Set<AudioObjectID> = []
     @Published var isActiveOutputMuted: Bool = false
     @Published var isActiveInputMuted: Bool = false
+    /// Connected outputs that were told to mute and kept playing anyway.
+    /// Named in the UI so the user knows to reach for the device's own controls
+    /// instead of assuming the app worked.
+    @Published var outputsIgnoringMute: [String] = []
     @Published var micFlashState: Bool = false
+    @Published var isEnormousMode: Bool
+    @Published var redirectMuteAllToBuiltIn: Bool
+    /// Set when Mute All had to move audio elsewhere to guarantee silence, so
+    /// the panel can say where it went.
+    @Published var redirectedOutputName: String?
 
-    private let deviceService = AudioDeviceService()
+    private let deviceService: any AudioDeviceServicing
     private var micFlashTimer: Timer?
-    let priorityManager = PriorityManager()
+    /// What the user asked to be silent, and what the hardware did about it.
+    private var ledger = MuteLedger()
+    /// Where the output was before Mute All moved it to guarantee silence.
+    private var outputBeforeMuteAll: String?
+    private var redirectedToUID: String?
+    let priorityManager: PriorityManager
     private var connectedDeviceUIDs: Set<String> = []
+    /// Unfiltered connected devices, including USB interface twins that are
+    /// collapsed to one row in the visible lists. Mute-all still addresses
+    /// every HAL object so a hidden twin cannot keep playing.
+    private var connectedOutputsForControl: [AudioDevice] = []
+    private var connectedInputsForControl: [AudioDevice] = []
 
     var menuBarIcon: String {
         currentMode.icon
     }
 
+    var defaultOutputCategory: OutputCategory {
+        get { priorityManager.defaultOutputCategory }
+        set { priorityManager.defaultOutputCategory = newValue }
+    }
+
+    var currentOutputSupportsSystemVolumeControl: Bool {
+        guard let device = device(withId: currentOutputId, type: .output) else { return true }
+        return usesDigitalVolume(for: device) && (deviceService.supportsDeviceVolumeControl(device.id, type: .output) || volumeControlPreference(for: device) == .digital)
+    }
+
+    var currentInputSupportsSystemVolumeControl: Bool {
+        guard let device = device(withId: currentInputId, type: .input) else { return true }
+        return usesDigitalVolume(for: device) && (deviceService.supportsDeviceVolumeControl(device.id, type: .input) || volumeControlPreference(for: device) == .digital)
+    }
+
+    func volumeControlPreference(for device: AudioDevice) -> VolumeControlPreference {
+        let preference = priorityManager.volumeControlPreference(for: device.uid)
+        if preference == .automatic && device.prefersDigitalVolumeControl {
+            return .digital
+        }
+        return preference
+    }
+
+    func setVolumeControlPreference(_ preference: VolumeControlPreference, for device: AudioDevice) {
+        priorityManager.setVolumeControlPreference(preference, for: device.uid)
+        if device.id == currentOutputId || device.id == currentInputId {
+            refreshVolume()
+            refreshInputGain()
+            objectWillChange.send()
+        }
+    }
+
+    private func usesDigitalVolume(for device: AudioDevice) -> Bool {
+        switch volumeControlPreference(for: device) {
+        case .digital: return true
+        case .device: return false
+        case .automatic: return device.supportsSystemVolumeControl
+        }
+    }
+
     func refreshVolume() {
-        volume = deviceService.getOutputVolume()
+        // A silenced device reads back whatever level it happens to be parked
+        // at, so show the level the user will actually hear: nothing.
+        if let device = currentOutputDevice, isDeviceMuted(device) {
+            volume = 0
+        } else {
+            volume = deviceService.getOutputVolume()
+        }
+    }
+
+    func refreshInputGain() {
+        if let device = currentInputDevice, isDeviceMuted(device) {
+            inputGain = 0
+        } else {
+            inputGain = deviceService.getInputVolume()
+        }
     }
 
     func refreshMuteStatus() {
-        var muted: Set<AudioObjectID> = []
-        for device in inputDevices where device.isConnected {
-            if deviceService.isDeviceMuted(device.id, type: .input) {
-                muted.insert(device.id)
-            }
-        }
-        for device in speakerDevices where device.isConnected {
-            if deviceService.isDeviceMuted(device.id, type: .output) {
-                muted.insert(device.id)
-            }
-        }
-        for device in headphoneDevices where device.isConnected {
-            if deviceService.isDeviceMuted(device.id, type: .output) {
-                muted.insert(device.id)
-            }
-        }
-        mutedDeviceIds = muted
-        if let outputId = currentOutputId {
-            isActiveOutputMuted = muted.contains(outputId)
+        isActiveOutputMuted = currentOutputDevice.map { isDeviceMuted($0) } ?? false
+        isActiveInputMuted = currentInputDevice.map { isDeviceMuted($0) } ?? false
+
+        if let device = currentOutputDevice, isDeviceIgnoringMute(device) {
+            outputsIgnoringMute = [device.name]
         } else {
-            isActiveOutputMuted = false
+            outputsIgnoringMute = []
         }
-        if let inputId = currentInputId {
-            isActiveInputMuted = muted.contains(inputId)
-        } else {
-            isActiveInputMuted = false
-        }
+
         if isActiveInputMuted && micFlashTimer == nil {
             micFlashTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in
                 Task { @MainActor in
@@ -142,13 +278,254 @@ class AudioManager: ObservableObject {
         }
     }
 
+    /// True when this device is silent. Intent comes first: a device that
+    /// accepted a mute but exposes no readable level would otherwise look live,
+    /// which is the failure the user hears as "mute did nothing".
     func isDeviceMuted(_ device: AudioDevice) -> Bool {
-        mutedDeviceIds.contains(device.id)
+        guard device.isConnected else { return false }
+        let key = device.muteKey
+        // Still audible despite being told to mute: saying "muted" here would
+        // be the lie that sent the user hunting for the sound.
+        if ledger.isKnownAudibleDespiteIntent(key) { return false }
+        if ledger.wantsMuted(key) { return true }
+        return deviceService.isDeviceMuted(device.id, type: device.type)
+    }
+
+    /// The device you are listening through was asked to mute and kept
+    /// playing.
+    ///
+    /// Scoped to the current output on purpose: macOS sends audio to the
+    /// default device only, so a device that is not selected is silent whether
+    /// or not it accepted the mute. Warning about those was telling the user
+    /// sound was coming out of devices that were not playing at all.
+    func isDeviceIgnoringMute(_ device: AudioDevice) -> Bool {
+        guard device.isConnected, device.id == currentOutputId else { return false }
+        return ledger.isKnownAudibleDespiteIntent(device.muteKey)
+    }
+
+    /// True when we could not silence a device, but it is not the one playing,
+    /// so there is nothing for the user to do about it right now.
+    func isDeviceUnmutable(_ device: AudioDevice) -> Bool {
+        guard device.isConnected else { return false }
+        return ledger.outcome(for: device.muteKey) == .refused
+    }
+
+    private func uniquedForControl(_ devices: [AudioDevice]) -> [AudioDevice] {
+        var seen = Set<String>()
+        return devices.filter { $0.isConnected && seen.insert("\($0.type.rawValue):\($0.uid)").inserted }
     }
 
     func setVolume(_ newVolume: Float) {
+        guard currentOutputSupportsSystemVolumeControl else { return }
+        // Reaching for the slider is the clearest "let sound out" there is, so
+        // it drops the mute-all latch rather than fighting it.
+        if newVolume > MuteLedger.silenceThreshold {
+            ledger.pinLatchAsIntents(connectedOutputsForControl.map(\.muteKey))
+            if let device = currentOutputDevice {
+                ledger.setIntent(muted: false, for: device.muteKey)
+                _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: .output)
+            }
+        }
         volume = newVolume
-        deviceService.setOutputVolume(newVolume)
+        deviceService.setOutputVolume(newVolume, force: true)
+        if let outputId = currentOutputId {
+            _ = deviceService.setDeviceVolume(newVolume, deviceId: outputId, type: .output, force: true)
+        }
+        saveLevel(newVolume, for: currentOutputId, type: .output)
+        refreshMuteStatus()
+    }
+
+    func setInputGain(_ newGain: Float) {
+        guard currentInputSupportsSystemVolumeControl else { return }
+        inputGain = newGain
+        let force = currentInputDevice.map { volumeControlPreference(for: $0) == .digital } ?? false
+        deviceService.setInputVolume(newGain, force: force)
+        saveLevel(newGain, for: currentInputId, type: .input)
+    }
+
+    func setPerDeviceLevelsEnabled(_ enabled: Bool) {
+        perDeviceLevelsEnabled = enabled
+        priorityManager.areDeviceLevelsEnabled = enabled
+        if enabled {
+            restoreLevel(for: currentOutputId, type: .output)
+            restoreLevel(for: currentInputId, type: .input)
+        }
+    }
+
+    func setRedirectMuteAllToBuiltIn(_ enabled: Bool) {
+        redirectMuteAllToBuiltIn = enabled
+        priorityManager.redirectMuteAllToBuiltIn = enabled
+    }
+
+    func setEnormousMode(_ enabled: Bool) {
+        isEnormousMode = enabled
+        priorityManager.isEnormousMode = enabled
+    }
+
+    var allConnectedOutputDevices: [AudioDevice] {
+        uniquedForControl(connectedOutputsForControl)
+    }
+
+    var areAllOutputsMuted: Bool {
+        // The latch answers first. Waiting for every device to agree means a
+        // display that ignores CoreAudio can keep the button saying "Mute All"
+        // forever, with no way to undo what did get muted.
+        if ledger.allOutputsEngaged { return true }
+        let devices = allConnectedOutputDevices
+        return !devices.isEmpty && devices.allSatisfy { isDeviceMuted($0) }
+    }
+
+    var allConnectedInputDevices: [AudioDevice] {
+        uniquedForControl(connectedInputsForControl)
+    }
+
+    var areAllInputsMuted: Bool {
+        let devices = allConnectedInputDevices
+        return !devices.isEmpty && devices.allSatisfy { isDeviceMuted($0) }
+    }
+
+    func setAllOutputsMuted(_ muted: Bool) {
+        if muted {
+            ledger.engageAllOutputs()
+            for device in connectedOutputsForControl {
+                silence(device)
+            }
+            if redirectMuteAllToBuiltIn {
+                redirectOutputIfItWillNotMute()
+            }
+        } else {
+            ledger.releaseAllOutputsAndIntents()
+            for device in connectedOutputsForControl {
+                restore(device)
+            }
+            returnOutputAfterMuteAll()
+        }
+        // Volume first: the mute summary reads the level, and refreshing them
+        // the other way round published a status computed from a stale value.
+        refreshVolume()
+        refreshMuteStatus()
+    }
+
+    func setAllInputsMuted(_ muted: Bool) {
+        for device in allConnectedInputDevices {
+            if muted {
+                ledger.setIntent(muted: true, for: device.muteKey)
+                silence(device)
+            } else {
+                restore(device)
+            }
+        }
+        refreshInputGain()
+        refreshMuteStatus()
+    }
+
+    /// Toggles one device from its own row. Muting a device the user is not
+    /// listening to is a normal thing to want, so this never changes which
+    /// device is selected.
+    func toggleMute(for device: AudioDevice) {
+        guard device.isConnected else { return }
+        if isDeviceMuted(device) || ledger.wantsMuted(device.muteKey) {
+            if device.type == .output {
+                // Letting one device through is not the same as undoing Mute
+                // All, so the rest keep their mute as an explicit intent.
+                ledger.pinLatchAsIntents(connectedOutputsForControl.map(\.muteKey))
+            }
+            restore(device)
+        } else {
+            ledger.setIntent(muted: true, for: device.muteKey)
+            silence(device)
+        }
+        refreshVolume()
+        refreshInputGain()
+        refreshMuteStatus()
+    }
+
+    /// Mute All has to end in silence, and some hardware will not cooperate:
+    /// displays accept the write and keep playing, interfaces run their own
+    /// volume. But macOS only ever sends audio to the default output, so
+    /// moving the default onto a device that *does* mute silences the machine
+    /// even when the device you were using cannot be silenced.
+    ///
+    /// The original output is remembered and handed back on Unmute All.
+    private func redirectOutputIfItWillNotMute() {
+        guard let current = currentOutputDevice,
+              ledger.isKnownAudibleDespiteIntent(current.muteKey),
+              let fallback = silenceableFallback(excluding: current) else { return }
+
+        outputBeforeMuteAll = current.uid
+        deviceService.setDefaultDevice(fallback.id, type: .output)
+        currentOutputId = fallback.id
+        // Becoming the default can undo the mute, so assert it again.
+        silence(fallback)
+        redirectedToUID = fallback.uid
+        redirectedOutputName = fallback.name
+    }
+
+    /// Every connected output was just asked to mute, so the ledger already
+    /// knows which ones actually went quiet. Prefer the Mac's own output: it is
+    /// always there, and it always mutes.
+    private func silenceableFallback(excluding current: AudioDevice) -> AudioDevice? {
+        let candidates = connectedOutputsForControl
+            .filter { $0.uid != current.uid && ledger.outcome(for: $0.muteKey) == .silenced }
+        return candidates.first(where: \.isBuiltIn) ?? candidates.first
+    }
+
+    /// Puts the output back where the user had it, unless they have since moved
+    /// it themselves.
+    private func returnOutputAfterMuteAll() {
+        defer {
+            outputBeforeMuteAll = nil
+            redirectedToUID = nil
+            redirectedOutputName = nil
+        }
+        guard let previousUID = outputBeforeMuteAll,
+              let redirectedToUID,
+              currentOutputDevice?.uid == redirectedToUID,
+              let previous = connectedOutputsForControl.first(where: { $0.uid == previousUID }) else { return }
+
+        deviceService.setDefaultDevice(previous.id, type: .output)
+        currentOutputId = previous.id
+        restore(previous)
+    }
+
+    /// Asks the hardware to go quiet and records whether it actually did.
+    @discardableResult
+    private func silence(_ device: AudioDevice) -> MuteOutcome {
+        let key = device.muteKey
+        if let current = deviceService.readDeviceVolume(device.id, type: device.type) {
+            ledger.saveLevel(current, for: key)
+        } else if let stored = priorityManager.deviceLevel(for: device.uid) {
+            // Unreadable level: fall back to the remembered one so unmuting has
+            // something better than a guess to return to.
+            ledger.saveLevel(stored, for: key)
+        }
+
+        let muteAccepted = deviceService.setDeviceMuted(true, deviceId: device.id, type: device.type)
+        let volumeAccepted = deviceService.setDeviceVolume(0, deviceId: device.id, type: device.type, force: true)
+        let outcome: MuteOutcome = (muteAccepted || volumeAccepted) ? .silenced : .refused
+        ledger.record(outcome, for: key)
+        return outcome
+    }
+
+    /// Brings a device back to a level the user can hear.
+    private func restore(_ device: AudioDevice) {
+        let key = device.muteKey
+        ledger.setIntent(muted: false, for: key)
+        _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: device.type)
+        let restored = MuteLedger.usableRestoredVolume(
+            saved: ledger.takeSavedLevel(for: key),
+            current: deviceService.readDeviceVolume(device.id, type: device.type),
+            fallback: device.type == .output ? volume : inputGain
+        )
+        _ = deviceService.setDeviceVolume(restored, deviceId: device.id, type: device.type, force: true)
+        if device.type == .output, device.id == currentOutputId {
+            deviceService.setOutputVolume(restored, force: true)
+            volume = restored
+        }
+        if device.type == .input, device.id == currentInputId {
+            deviceService.setInputVolume(restored, force: true)
+            inputGain = restored
+        }
     }
 
     var activeOutputDevices: [AudioDevice] {
@@ -158,18 +535,39 @@ class AudioManager: ObservableObject {
         }
     }
 
-    init() {
+    init(
+        deviceService: any AudioDeviceServicing = AudioDeviceService(),
+        priorityManager: PriorityManager = PriorityManager()
+    ) {
+        self.deviceService = deviceService
+        self.priorityManager = priorityManager
         currentMode = priorityManager.currentMode
         isCustomMode = priorityManager.isCustomMode
+        perDeviceLevelsEnabled = priorityManager.areDeviceLevelsEnabled
+        isEnormousMode = priorityManager.isEnormousMode
+        redirectMuteAllToBuiltIn = priorityManager.redirectMuteAllToBuiltIn
         refreshDevices()
         previousConnectedUIDs = connectedDeviceUIDs  // Initialize tracking
         refreshVolume()
+        refreshInputGain()
         refreshMuteStatus()
         setupDeviceChangeListener()
         setupMuteVolumeListener()
+        requestMicrophoneAccessIfNeeded()
         if !isCustomMode {
             applyHighestPriorityInput()
             applyHighestPriorityOutput()
+        }
+    }
+
+    private func requestMicrophoneAccessIfNeeded() {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else { return }
+        AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+            Task { @MainActor in
+                // CoreAudio hides input streams until permission has been answered.
+                self?.refreshDevices()
+                self?.refreshMuteStatus()
+            }
         }
     }
 
@@ -182,18 +580,54 @@ class AudioManager: ObservableObject {
     }
 
     private func handleMuteOrVolumeChange() {
-        refreshMuteStatus()
+        adoptExternalUnmutes()
         refreshVolume()
+        refreshInputGain()
+        refreshMuteStatus()
+    }
+
+    /// CoreAudio also reports volume changes the app did not make: the volume
+    /// keys, System Settings, a device's own knob. If something we silenced is
+    /// audible again, the user wanted that, so let go of the intent rather than
+    /// re-muting behind their back.
+    ///
+    /// A device that refused the mute never went quiet, so its level says
+    /// nothing about intent and is deliberately excluded.
+    private func adoptExternalUnmutes() {
+        for device in connectedOutputsForControl + connectedInputsForControl {
+            let key = device.muteKey
+            guard ledger.wantsMuted(key) else { continue }
+            guard let level = deviceService.readDeviceVolume(device.id, type: device.type) else { continue }
+            guard !deviceService.isDeviceMuted(device.id, type: device.type) else { continue }
+            guard ledger.externalUnmuteDetected(for: key, level: level) else { continue }
+            if device.type == .output {
+                ledger.releaseAllOutputs()
+            }
+            ledger.setIntent(muted: false, for: key)
+        }
     }
 
     func refreshDevices() {
         let allConnectedDevices = deviceService.getDevices()
         connectedDeviceUIDs = Set(allConnectedDevices.map { $0.uid })
         for device in allConnectedDevices {
+            priorityManager.migrateDeviceUIDIfNeeded(
+                uid: device.uid,
+                name: device.name,
+                isInput: device.type == .input
+            )
             priorityManager.rememberDevice(device.uid, name: device.name, isInput: device.type == .input)
         }
-        let connectedInputs = allConnectedDevices.filter { $0.type == .input }
-        let connectedOutputs = allConnectedDevices.filter { $0.type == .output }
+        connectedInputsForControl = allConnectedDevices.filter { $0.type == .input }
+        connectedOutputsForControl = allConnectedDevices.filter { $0.type == .output }
+        let connectedInputs = AudioDevice.uniqued(
+            connectedInputsForControl,
+            preferring: deviceService.getCurrentDefaultDevice(type: .input)
+        )
+        let connectedOutputs = AudioDevice.uniqued(
+            connectedOutputsForControl,
+            preferring: deviceService.getCurrentDefaultDevice(type: .output)
+        )
 
         if isEditMode {
             let knownDevices = priorityManager.getKnownDevices()
@@ -385,14 +819,134 @@ class AudioManager: ObservableObject {
         applyOutputDevice(device)
     }
 
-    private func applyInputDevice(_ device: AudioDevice) {
-        deviceService.setDefaultDevice(device.id, type: .input)
-        currentInputId = device.id
+    /// Select an output and its category as one operation. Changing the mode
+    /// first would briefly apply priority-one output, which is visible as a
+    /// bounce and can override combined input/output devices such as USB
+    /// microphones with headphone outputs.
+    func selectOutputDevice(_ device: AudioDevice, category: OutputCategory, applyMode: Bool = true) {
+        activateOutput(device, category: category, applyMode: applyMode, silent: false)
     }
 
-    private func applyOutputDevice(_ device: AudioDevice) {
+    /// Clicking a device walks it through three states: neutral, active but
+    /// silent, then active and audible.
+    ///
+    /// Landing on a device silent is the point — choosing an output can then
+    /// never blast sound at you, and the second click is the one that commits.
+    func cycleOutputPresentation(_ device: AudioDevice, category: OutputCategory, applyMode: Bool = true) {
+        switch outputPresentation(for: device) {
+        case .unselected:
+            activateOutput(device, category: category, applyMode: applyMode, silent: true)
+        case .muted:
+            toggleMute(for: device)
+        case .unmuted:
+            // Third click parks this device and hands over to the next one in
+            // the list, also silent. With nowhere to hand over to, fall back to
+            // muting so the click is never dead.
+            if let next = nextConnectedOutput(after: device, in: category) {
+                activateOutput(next, category: category, applyMode: applyMode, silent: true)
+            } else {
+                toggleMute(for: device)
+            }
+        }
+    }
+
+    private func nextConnectedOutput(after device: AudioDevice, in category: OutputCategory) -> AudioDevice? {
+        let pool = (category == .headphone ? headphoneDevices : speakerDevices)
+            .filter { $0.isConnected && !priorityManager.isNeverUse($0) }
+        guard pool.count > 1, let index = pool.firstIndex(where: { $0.uid == device.uid }) else { return nil }
+        return pool[(index + 1) % pool.count]
+    }
+
+    private func activateOutput(_ device: AudioDevice, category: OutputCategory, applyMode: Bool, silent: Bool) {
+        if applyMode {
+            currentMode = category
+            priorityManager.currentMode = category
+        }
+        if silent {
+            ledger.setIntent(muted: true, for: device.muteKey)
+        }
+        applyOutputDevice(device, makeAudible: !silent)
+    }
+
+    func outputPresentation(for device: AudioDevice) -> OutputPresentation {
+        guard device.id == currentOutputId else { return .unselected }
+        return isDeviceMuted(device) ? .muted : .unmuted
+    }
+
+    private func applyInputDevice(_ device: AudioDevice) {
+        if let currentInputId {
+            saveLevel(deviceService.getDeviceVolume(currentInputId, type: .input), for: currentInputId, type: .input)
+        }
+        deviceService.setDefaultDevice(device.id, type: .input)
+        currentInputId = device.id
+        restoreLevel(for: currentInputId, type: .input)
+    }
+
+    private func applyOutputDevice(_ device: AudioDevice, makeAudible: Bool = false) {
+        // Never record a muted device's zero as its remembered level, or the
+        // next switch back restores silence.
+        if let outgoing = currentOutputDevice, !isDeviceMuted(outgoing) {
+            saveLevel(deviceService.getDeviceVolume(outgoing.id), for: outgoing.id, type: .output)
+        }
         deviceService.setDefaultDevice(device.id, type: .output)
         currentOutputId = device.id
+        if makeAudible {
+            ledger.pinLatchAsIntents(connectedOutputsForControl.map(\.muteKey))
+            makeOutputAudible(device)
+        } else if ledger.wantsMuted(device.muteKey) {
+            // "Keep muted when switching" is on: the device the user picked
+            // stays silent instead of surprising them with sound.
+            silence(device)
+        } else {
+            restoreLevel(for: currentOutputId, type: .output)
+        }
+        refreshVolume()
+        refreshMuteStatus()
+    }
+
+    private func makeOutputAudible(_ device: AudioDevice) {
+        let key = device.muteKey
+        ledger.setIntent(muted: false, for: key)
+        _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: .output)
+        let restored = MuteLedger.usableRestoredVolume(
+            saved: perDeviceLevelsEnabled
+                ? (priorityManager.deviceLevel(for: device.uid) ?? ledger.takeSavedLevel(for: key))
+                : ledger.takeSavedLevel(for: key),
+            current: deviceService.readDeviceVolume(device.id, type: .output),
+            fallback: volume
+        )
+        _ = deviceService.setDeviceVolume(restored, deviceId: device.id, type: .output, force: true)
+        deviceService.setOutputVolume(restored, force: true)
+        volume = restored
+    }
+
+    private func device(withId id: AudioObjectID?, type: AudioDeviceType) -> AudioDevice? {
+        guard let id else { return nil }
+        return (inputDevices + speakerDevices + headphoneDevices).first {
+            $0.id == id && $0.type == type
+        }
+    }
+
+    private var currentOutputDevice: AudioDevice? { device(withId: currentOutputId, type: .output) }
+    private var currentInputDevice: AudioDevice? { device(withId: currentInputId, type: .input) }
+
+    private func saveLevel(_ level: Float, for id: AudioObjectID?, type: AudioDeviceType) {
+        guard level > 0.01 else { return }
+        guard perDeviceLevelsEnabled, let device = device(withId: id, type: type) else { return }
+        guard usesDigitalVolume(for: device) else { return }
+        priorityManager.saveDeviceLevel(level, for: device.uid)
+    }
+
+    private func restoreLevel(for id: AudioObjectID?, type: AudioDeviceType) {
+        guard perDeviceLevelsEnabled, let device = device(withId: id, type: type) else { return }
+        guard usesDigitalVolume(for: device) else { return }
+        if let level = priorityManager.deviceLevel(for: device.uid) {
+            let force = volumeControlPreference(for: device) == .digital
+            if type == .output { deviceService.setOutputVolume(level, force: force); volume = level }
+            else { deviceService.setInputVolume(level, force: force); inputGain = level }
+        } else {
+            saveLevel(deviceService.getDeviceVolume(device.id, type: type), for: id, type: type)
+        }
     }
 
     private func applyHighestPriorityInput() {
@@ -425,9 +979,13 @@ class AudioManager: ObservableObject {
         
         // Detect newly connected devices
         let newlyConnectedUIDs = connectedDeviceUIDs.subtracting(oldConnectedUIDs)
+        let disconnectedUIDs = oldConnectedUIDs.subtracting(connectedDeviceUIDs)
         previousConnectedUIDs = connectedDeviceUIDs
-        
-        if !isCustomMode {
+
+        // A default-device notification also arrives when the user selects a
+        // device. Only reapply priority after an actual connection change;
+        // otherwise the listener immediately overwrites the user's choice.
+        if !isCustomMode && (!newlyConnectedUIDs.isEmpty || !disconnectedUIDs.isEmpty) {
             // Auto-switch mode only when a new headphone connects or all headphones disconnect
             autoSwitchModeIfNeeded(newlyConnectedUIDs: newlyConnectedUIDs)
             applyHighestPriorityInput()
