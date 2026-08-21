@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreAudio
+import AppKit
 import UniformTypeIdentifiers
 
 struct DeviceListView: View {
@@ -168,12 +169,12 @@ struct DraggableDeviceRow: View {
                         .opacity(isHovering || isDragging ? 1 : 0)
                         .scaleEffect(isHovering || isDragging ? 1 : 0.8)
                     
-                    // Priority number or "Active" label when not hovering
+                    // Priority number or a compact native selection indicator
                     Group {
                         if isSelected && !isDisconnected {
-                            Text("Active")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundColor(.accentColor)
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(.green)
                         } else {
                             Text("\(index + 1)")
                                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
@@ -210,12 +211,20 @@ struct DraggableDeviceRow: View {
                 }
 
                 if isMuted {
-                    Text("Muted")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.white)
+                        HStack(spacing: 4) {
+                            Image(systemName: "speaker.slash.fill")
+                                .font(.system(size: 9))
+                            Text("Muted")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .foregroundColor(.secondary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.red))
+                        .background(
+                            Capsule()
+                                .fill(Color(NSColor.windowBackgroundColor))
+                                .overlay(Capsule().stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                        )
                 }
 
                 Spacer(minLength: 12)
@@ -293,6 +302,27 @@ struct DraggableDeviceRow: View {
 
                     if device.isConnected {
                         Divider()
+                        Menu {
+                            Button {
+                                audioManager.setVolumeControlPreference(.automatic, for: device)
+                            } label: {
+                                Label("Automatic", systemImage: audioManager.volumeControlPreference(for: device) == .automatic ? "checkmark" : "")
+                            }
+                            Button {
+                                audioManager.setVolumeControlPreference(.digital, for: device)
+                            } label: {
+                                Label("Use digital slider", systemImage: audioManager.volumeControlPreference(for: device) == .digital ? "checkmark" : "")
+                            }
+                            Button {
+                                audioManager.setVolumeControlPreference(.device, for: device)
+                            } label: {
+                                Label("Use device controls", systemImage: audioManager.volumeControlPreference(for: device) == .device ? "checkmark" : "")
+                            }
+                        } label: {
+                            Label("Volume control", systemImage: "speaker.wave.2")
+                        }
+
+                        Divider()
                         Button {
                             audioManager.setNeverUse(device, neverUse: !audioManager.isNeverUse(device))
                         } label: {
@@ -324,11 +354,11 @@ struct DraggableDeviceRow: View {
         .opacity(isDragging ? 0.5 : (isGrayed ? 0.6 : 1.0))
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(isSelected && !isDisconnected ? Color.accentColor.opacity(0.12) : (isHovering ? Color.primary.opacity(0.06) : Color.clear))
+                .fill(isSelected && !isDisconnected ? Color(NSColor.controlBackgroundColor).opacity(0.4) : (isHovering ? Color.primary.opacity(0.1) : Color.clear))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(isSelected && !isDisconnected ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 1.5)
+                .stroke(isSelected && !isDisconnected ? Color.secondary.opacity(0.2) : Color.clear, lineWidth: 1)
         )
         // Drop indicator above this row
         .overlay(alignment: .top) {
@@ -368,7 +398,10 @@ struct DraggableDeviceRow: View {
                 onSelect()
             }
         }
-        .gesture(
+        // The rows live inside the menu's ScrollView. A normal gesture lets
+        // that parent consume the vertical movement, so reordering never
+        // starts. Give an intentional row drag priority over scrolling.
+        .highPriorityGesture(
             DragGesture(minimumDistance: 5)
                 .onChanged { value in
                     if !isDragging {

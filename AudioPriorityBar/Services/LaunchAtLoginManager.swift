@@ -4,6 +4,12 @@ import ServiceManagement
 @MainActor
 class LaunchAtLoginManager: ObservableObject {
     static let shared = LaunchAtLoginManager()
+
+    /// A checkout/build artifact must not register itself as a second login
+    /// item alongside the installed app in ~/Applications or /Applications.
+    var canManageLaunchAtLogin: Bool {
+        Bundle.main.bundleURL.pathComponents.contains("Applications")
+    }
     
     @Published var isEnabled: Bool {
         didSet {
@@ -17,7 +23,8 @@ class LaunchAtLoginManager: ObservableObject {
     
     private init() {
         // Check current status
-        if #available(macOS 13.0, *) {
+        let isInstalledCopy = Bundle.main.bundleURL.pathComponents.contains("Applications")
+        if isInstalledCopy, #available(macOS 13.0, *) {
             isEnabled = SMAppService.mainApp.status == .enabled
         } else {
             isEnabled = false
@@ -25,6 +32,7 @@ class LaunchAtLoginManager: ObservableObject {
     }
     
     private func enableLaunchAtLogin() {
+        guard canManageLaunchAtLogin else { return }
         if #available(macOS 13.0, *) {
             do {
                 try SMAppService.mainApp.register()
@@ -39,6 +47,7 @@ class LaunchAtLoginManager: ObservableObject {
     }
     
     private func disableLaunchAtLogin() {
+        guard canManageLaunchAtLogin else { return }
         if #available(macOS 13.0, *) {
             do {
                 try SMAppService.mainApp.unregister()
@@ -49,6 +58,7 @@ class LaunchAtLoginManager: ObservableObject {
     }
     
     func refresh() {
+        guard canManageLaunchAtLogin else { return }
         if #available(macOS 13.0, *) {
             let newStatus = SMAppService.mainApp.status == .enabled
             if newStatus != isEnabled {
@@ -58,4 +68,3 @@ class LaunchAtLoginManager: ObservableObject {
         }
     }
 }
-

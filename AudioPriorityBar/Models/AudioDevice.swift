@@ -6,6 +6,20 @@ enum AudioDeviceType: String, Codable {
     case output
 }
 
+enum VolumeControlPreference: String, Codable {
+    case automatic
+    case digital
+    case device
+
+    var label: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .digital: return "Digital slider"
+        case .device: return "Device controls"
+        }
+    }
+}
+
 enum OutputCategory: String, Codable, CaseIterable {
     case speaker
     case headphone
@@ -34,6 +48,21 @@ struct AudioDevice: Identifiable, Equatable, Hashable {
 
     var isValid: Bool {
         id != kAudioObjectUnknown
+    }
+
+    /// Vocaster's listening and microphone levels are controlled by its
+    /// internal mixer and physical controls, not macOS's virtual main volume.
+    /// A CoreAudio volume property may still exist, but changing it does not
+    /// change the level heard through the Vocaster.
+    var supportsSystemVolumeControl: Bool {
+        !name.localizedCaseInsensitiveContains("vocaster")
+    }
+
+    /// External displays generally have no convenient physical volume
+    /// control, so prefer the digital slider for this monitor family unless
+    /// the user explicitly chooses another mode.
+    var prefersDigitalVolumeControl: Bool {
+        name.localizedCaseInsensitiveContains("PL2792Q")
     }
 
     // Create a disconnected placeholder from stored device

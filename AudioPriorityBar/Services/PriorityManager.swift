@@ -42,6 +42,11 @@ class PriorityManager {
     private let customModeKey = "customMode"
     private let hiddenDevicesKey = "hiddenDevices"
     private let knownDevicesKey = "knownDevices"
+    private let deviceLevelsKey = "deviceLevels"
+    private let deviceLevelsEnabledKey = "deviceLevelsEnabled"
+    private let volumeControlPreferencesKey = "volumeControlPreferences"
+    private let defaultOutputCategoryKey = "defaultOutputCategory"
+    private let enormousModeKey = "enormousMode"
 
     // MARK: - Known Devices (Persistent Memory)
 
@@ -62,6 +67,35 @@ class PriorityManager {
         } else {
             known.append(StoredDevice(uid: uid, name: name, isInput: isInput, lastSeen: now))
         }
+        saveKnownDevices(known)
+    }
+
+    /// Some USB devices (notably Studio Display audio) include the connection
+    /// path in their UID and return with a new UID after reconnecting. Move the
+    /// old device's settings before recording the new identity.
+    func migrateDeviceUIDIfNeeded(uid: String, name: String, isInput: Bool) {
+        guard getStoredDevice(uid: uid) == nil else { return }
+        guard let old = getKnownDevices().last(where: {
+            $0.uid != uid && $0.name == name && $0.isInput == isInput
+        }) else { return }
+
+        migrateUID(in: inputPrioritiesKey, from: old.uid, to: uid)
+        migrateUID(in: speakerPrioritiesKey, from: old.uid, to: uid)
+        migrateUID(in: headphonePrioritiesKey, from: old.uid, to: uid)
+        migrateUID(in: hiddenMicsKey, from: old.uid, to: uid)
+        migrateUID(in: hiddenSpeakersKey, from: old.uid, to: uid)
+        migrateUID(in: hiddenHeadphonesKey, from: old.uid, to: uid)
+        migrateUID(in: neverUseKey, from: old.uid, to: uid)
+        migrateUID(in: deviceLevelsKey, from: old.uid, to: uid)
+
+        var categories = defaults.dictionary(forKey: deviceCategoriesKey) as? [String: String] ?? [:]
+        if let category = categories.removeValue(forKey: old.uid) {
+            categories[uid] = category
+            defaults.set(categories, forKey: deviceCategoriesKey)
+        }
+
+        var known = getKnownDevices()
+        known.removeAll { $0.uid == old.uid }
         saveKnownDevices(known)
     }
 
@@ -96,9 +130,70 @@ class PriorityManager {
         }
     }
 
+    var defaultOutputCategory: OutputCategory {
+        get {
+            guard let raw = defaults.string(forKey: defaultOutputCategoryKey),
+                  let category = OutputCategory(rawValue: raw) else { return .speaker }
+            return category
+        }
+        set { defaults.set(newValue.rawValue, forKey: defaultOutputCategoryKey) }
+    }
+
+    var isEnormousMode: Bool {
+        get {
+            guard defaults.object(forKey: enormousModeKey) != nil else { return true }
+            return defaults.bool(forKey: enormousModeKey)
+        }
+        set { defaults.set(newValue, forKey: enormousModeKey) }
+    }
+
     var isCustomMode: Bool {
         get { defaults.bool(forKey: customModeKey) }
         set { defaults.set(newValue, forKey: customModeKey) }
+    }
+
+    var areDeviceLevelsEnabled: Bool {
+        get {
+            guard defaults.object(forKey: deviceLevelsEnabledKey) != nil else { return true }
+            return defaults.bool(forKey: deviceLevelsEnabledKey)
+        }
+        set { defaults.set(newValue, forKey: deviceLevelsEnabledKey) }
+    }
+
+    func deviceLevel(for uid: String) -> Float? {
+        guard let data = defaults.data(forKey: deviceLevelsKey),
+              let levels = try? JSONDecoder().decode([String: Float].self, from: data) else { return nil }
+        return levels[uid]
+    }
+
+    func saveDeviceLevel(_ level: Float, for uid: String) {
+        var levels: [String: Float] = [:]
+        if let data = defaults.data(forKey: deviceLevelsKey),
+           let stored = try? JSONDecoder().decode([String: Float].self, from: data) {
+            levels = stored
+        }
+        levels[uid] = max(0, min(1, level))
+        if let data = try? JSONEncoder().encode(levels) {
+            defaults.set(data, forKey: deviceLevelsKey)
+        }
+    }
+
+    func volumeControlPreference(for uid: String) -> VolumeControlPreference {
+        let preferences = defaults.dictionary(forKey: volumeControlPreferencesKey) as? [String: String] ?? [:]
+        guard let raw = preferences[uid], let preference = VolumeControlPreference(rawValue: raw) else {
+            return .automatic
+        }
+        return preference
+    }
+
+    func setVolumeControlPreference(_ preference: VolumeControlPreference, for uid: String) {
+        var preferences = defaults.dictionary(forKey: volumeControlPreferencesKey) as? [String: String] ?? [:]
+        if preference == .automatic {
+            preferences.removeValue(forKey: uid)
+        } else {
+            preferences[uid] = preference.rawValue
+        }
+        defaults.set(preferences, forKey: volumeControlPreferencesKey)
     }
 
     // MARK: - Device Categories
@@ -242,15 +337,43 @@ class PriorityManager {
     private func sortDevices(_ devices: [AudioDevice], usingKey key: String) -> [AudioDevice] {
         let priorities = defaults.array(forKey: key) as? [String] ?? []
 
-        return devices.sorted { a, b in
-            let indexA = priorities.firstIndex(of: a.uid) ?? Int.max
-            let indexB = priorities.firstIndex(of: b.uid) ?? Int.max
-            return indexA < indexB
+        return devices.enumerated().sorted { lhs, rhs in
+            let indexA = priorities.firstIndex(of: lhs.element.uid) ?? Int.max
+            let indexB = priorities.firstIndex(of: rhs.element.uid) ?? Int.max
+            return indexA == indexB ? lhs.offset < rhs.offset : indexA < indexB
+        }.map(\.element)
+    }
+
+    private func migrateUID(in key: String, from oldUID: String, to newUID: String) {
+        if key == deviceLevelsKey {
+            guard let data = defaults.data(forKey: key),
+                  var levels = try? JSONDecoder().decode([String: Float].self, from: data),
+                  let level = levels.removeValue(forKey: oldUID) else { return }
+            levels[newUID] = level
+            if let newData = try? JSONEncoder().encode(levels) { defaults.set(newData, forKey: key) }
+            return
         }
+        guard var values = defaults.array(forKey: key) as? [String],
+              let index = values.firstIndex(of: oldUID) else { return }
+        values.removeAll { $0 == newUID || $0 == oldUID }
+        values.insert(newUID, at: min(index, values.count))
+        defaults.set(values, forKey: key)
+    }
+
+    private func mergedPriorityOrder(existing: [String], visible: [String]) -> [String] {
+        guard !existing.isEmpty else { return visible }
+        var remaining = visible
+        var result = existing.map { uid -> String in
+            guard let index = remaining.firstIndex(of: uid) else { return uid }
+            return remaining.remove(at: index)
+        }
+        result.append(contentsOf: remaining)
+        return result
     }
 
     private func savePriorities(_ devices: [AudioDevice], key: String) {
         let uids = devices.map { $0.uid }
-        defaults.set(uids, forKey: key)
+        let existing = defaults.array(forKey: key) as? [String] ?? []
+        defaults.set(mergedPriorityOrder(existing: existing, visible: uids), forKey: key)
     }
 }

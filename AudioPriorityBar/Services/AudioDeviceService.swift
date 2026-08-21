@@ -108,48 +108,97 @@ class AudioDeviceService {
 
     func getOutputVolume() -> Float {
         guard let deviceId = getCurrentDefaultDevice(type: .output) else { return 0 }
-
-        var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        var volume: Float32 = 0
-        var dataSize = UInt32(MemoryLayout<Float32>.size)
-
-        let status = AudioObjectGetPropertyData(
-            deviceId,
-            &propertyAddress,
-            0,
-            nil,
-            &dataSize,
-            &volume
-        )
-
-        return status == noErr ? volume : 0
+        return getDeviceVolume(deviceId, type: .output)
     }
 
     func setOutputVolume(_ volume: Float) {
+        setOutputVolume(volume, force: false)
+    }
+
+    func setOutputVolume(_ volume: Float, force: Bool) {
         guard let deviceId = getCurrentDefaultDevice(type: .output) else { return }
+        setDeviceVolume(volume, deviceId: deviceId, type: .output, force: force)
+    }
 
-        var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain
-        )
+    func getInputVolume() -> Float {
+        guard let deviceId = getCurrentDefaultDevice(type: .input) else { return 1 }
+        return getDeviceVolume(deviceId, type: .input)
+    }
 
+    func setInputVolume(_ volume: Float) {
+        setInputVolume(volume, force: false)
+    }
+
+    func setInputVolume(_ volume: Float, force: Bool) {
+        guard let deviceId = getCurrentDefaultDevice(type: .input) else { return }
+        setDeviceVolume(volume, deviceId: deviceId, type: .input, force: force)
+    }
+
+    func getDeviceVolume(_ deviceId: AudioObjectID, type: AudioDeviceType = .output) -> Float {
+        let scope = type == .input ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput
+
+        if let volume = readVolume(deviceId: deviceId, selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume, scope: scope, element: kAudioObjectPropertyElementMain) {
+            return volume
+        }
+
+        // Some devices, notably HDMI displays, expose volume per output
+        // channel rather than through the virtual main-volume property.
+        let channelVolumes = (1...2).compactMap { element in
+            readVolume(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope, element: AudioObjectPropertyElement(element))
+        }
+        return channelVolumes.first ?? 1.0
+    }
+
+    @discardableResult
+    func setDeviceVolume(_ volume: Float, deviceId: AudioObjectID, type: AudioDeviceType, force: Bool = false) -> Bool {
+        let scope = type == .input ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput
+
+        if writeVolume(deviceId: deviceId, selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume, scope: scope, element: kAudioObjectPropertyElementMain, volume: volume, requireSettable: !force) {
+            return true
+        }
+
+        // Fall back to the writable left/right scalar volume controls used by
+        // some HDMI and display audio devices.
+        var didWrite = false
+        for element in 1...2 {
+            didWrite = writeVolume(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope, element: AudioObjectPropertyElement(element), volume: volume, requireSettable: !force) || didWrite
+        }
+        return didWrite
+    }
+
+    func supportsDeviceVolumeControl(_ deviceId: AudioObjectID, type: AudioDeviceType) -> Bool {
+        let scope = type == .input ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput
+        if isVolumeSettable(deviceId: deviceId, selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume, scope: scope, element: kAudioObjectPropertyElementMain) {
+            return true
+        }
+        return (1...2).contains { element in
+            isVolumeSettable(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope, element: AudioObjectPropertyElement(element))
+        }
+    }
+
+    private func readVolume(deviceId: AudioObjectID, selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope, element: AudioObjectPropertyElement) -> Float? {
+        var propertyAddress = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
+        var volume: Float32 = 0
+        var dataSize = UInt32(MemoryLayout<Float32>.size)
+        let status = AudioObjectGetPropertyData(deviceId, &propertyAddress, 0, nil, &dataSize, &volume)
+        return status == noErr ? volume : nil
+    }
+
+    private func writeVolume(deviceId: AudioObjectID, selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope, element: AudioObjectPropertyElement, volume: Float, requireSettable: Bool = true) -> Bool {
+        var propertyAddress = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
+        guard AudioObjectHasProperty(deviceId, &propertyAddress) else { return false }
+        if requireSettable && !isVolumeSettable(deviceId: deviceId, selector: selector, scope: scope, element: element) { return false }
         var mutableVolume = volume
         let dataSize = UInt32(MemoryLayout<Float32>.size)
+        return AudioObjectSetPropertyData(deviceId, &propertyAddress, 0, nil, dataSize, &mutableVolume) == noErr
+    }
 
-        AudioObjectSetPropertyData(
-            deviceId,
-            &propertyAddress,
-            0,
-            nil,
-            dataSize,
-            &mutableVolume
-        )
+    private func isVolumeSettable(deviceId: AudioObjectID, selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope, element: AudioObjectPropertyElement) -> Bool {
+        var propertyAddress = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
+        guard AudioObjectHasProperty(deviceId, &propertyAddress) else { return false }
+        var settable = DarwinBoolean(false)
+        let status = AudioObjectIsPropertySettable(deviceId, &propertyAddress, &settable)
+        return status == noErr && settable.boolValue
     }
 
     func isDeviceMuted(_ deviceId: AudioObjectID, type: AudioDeviceType) -> Bool {
@@ -206,26 +255,25 @@ class AudioDeviceService {
         return false
     }
 
-    func getDeviceVolume(_ deviceId: AudioObjectID) -> Float {
-        var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain
-        )
+    @discardableResult
+    func setDeviceMuted(_ muted: Bool, deviceId: AudioObjectID, type: AudioDeviceType) -> Bool {
+        let scope: AudioObjectPropertyScope = type == .input
+            ? kAudioDevicePropertyScopeInput
+            : kAudioDevicePropertyScopeOutput
 
-        var volume: Float32 = 0
-        var dataSize = UInt32(MemoryLayout<Float32>.size)
-
-        let status = AudioObjectGetPropertyData(
-            deviceId,
-            &propertyAddress,
-            0,
-            nil,
-            &dataSize,
-            &volume
-        )
-
-        return status == noErr ? volume : 1.0
+        var didWrite = false
+        for element in [kAudioObjectPropertyElementMain, AudioObjectPropertyElement(1), AudioObjectPropertyElement(2)] {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyMute,
+                mScope: scope,
+                mElement: element
+            )
+            guard AudioObjectHasProperty(deviceId, &address) else { continue }
+            var value: UInt32 = muted ? 1 : 0
+            let size = UInt32(MemoryLayout<UInt32>.size)
+            didWrite = AudioObjectSetPropertyData(deviceId, &address, 0, nil, size, &value) == noErr || didWrite
+        }
+        return didWrite
     }
 
     func startListening() {

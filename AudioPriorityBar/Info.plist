@@ -24,5 +24,9 @@
     <string>public.app-category.utilities</string>
     <key>LSUIElement</key>
     <true/>
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Audio Priority Bar needs microphone access to list and switch input devices.</string>
 </dict>
 </plist>

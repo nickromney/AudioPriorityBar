@@ -1,9 +1,52 @@
 import SwiftUI
 import CoreAudio
+import AVFoundation
+import Darwin
+
+/// Menu-bar apps can be launched from multiple copies on disk. Bundle IDs do
+/// not prevent that, so keep an OS-level lock for the lifetime of this process.
+final class SingleInstanceGuard {
+    static let shared = SingleInstanceGuard()
+
+    private var fileDescriptor: Int32 = -1
+
+    private init() {}
+
+    func acquire() -> Bool {
+        guard fileDescriptor == -1 else { return true }
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AudioPriorityBar.instance.lock")
+            .path
+        let descriptor = open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { return false }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            close(descriptor)
+            return false
+        }
+        fileDescriptor = descriptor
+        return true
+    }
+
+    deinit {
+        if fileDescriptor >= 0 {
+            flock(fileDescriptor, LOCK_UN)
+            close(fileDescriptor)
+        }
+    }
+}
 
 @main
 struct AudioPriorityBarApp: App {
-    @StateObject private var audioManager = AudioManager()
+    @StateObject private var audioManager: AudioManager
+
+    init() {
+        guard SingleInstanceGuard.shared.acquire() else {
+            // Another copy already owns the menu-bar slot. Exit quietly so a
+            // second app bundle cannot leave a confusing duplicate icon.
+            exit(EXIT_SUCCESS)
+        }
+        _audioManager = StateObject(wrappedValue: AudioManager())
+    }
     
     var body: some Scene {
         MenuBarExtra {
@@ -81,15 +124,24 @@ class AudioManager: ObservableObject {
     @Published var currentOutputId: AudioObjectID?
     @Published var currentMode: OutputCategory = .speaker
     @Published var volume: Float = 0
+    @Published var inputGain: Float = 0
+    @Published var perDeviceLevelsEnabled: Bool
     @Published var isEditMode: Bool = false
     @Published var isCustomMode: Bool = false
-    @Published var mutedDeviceIds: Set<AudioObjectID> = []
+    // A single CoreAudio device can expose both input and output streams.
+    // Keep direction in the key so muting one side never marks the other side muted.
+    @Published var mutedDeviceKeys: Set<String> = []
     @Published var isActiveOutputMuted: Bool = false
     @Published var isActiveInputMuted: Bool = false
     @Published var micFlashState: Bool = false
+    @Published var isEnormousMode: Bool
 
     private let deviceService = AudioDeviceService()
     private var micFlashTimer: Timer?
+    private var softwareMutedInputKeys: Set<String> = []
+    private var softwareMutedOutputKeys: Set<String> = []
+    private var savedInputVolumes: [String: Float] = [:]
+    private var savedOutputVolumes: [String: Float] = [:]
     let priorityManager = PriorityManager()
     private var connectedDeviceUIDs: Set<String> = []
 
@@ -97,35 +149,79 @@ class AudioManager: ObservableObject {
         currentMode.icon
     }
 
+    var defaultOutputCategory: OutputCategory {
+        get { priorityManager.defaultOutputCategory }
+        set { priorityManager.defaultOutputCategory = newValue }
+    }
+
+    var currentOutputSupportsSystemVolumeControl: Bool {
+        guard let device = device(withId: currentOutputId, type: .output) else { return true }
+        return usesDigitalVolume(for: device) && (deviceService.supportsDeviceVolumeControl(device.id, type: .output) || volumeControlPreference(for: device) == .digital)
+    }
+
+    var currentInputSupportsSystemVolumeControl: Bool {
+        guard let device = device(withId: currentInputId, type: .input) else { return true }
+        return usesDigitalVolume(for: device) && (deviceService.supportsDeviceVolumeControl(device.id, type: .input) || volumeControlPreference(for: device) == .digital)
+    }
+
+    func volumeControlPreference(for device: AudioDevice) -> VolumeControlPreference {
+        let preference = priorityManager.volumeControlPreference(for: device.uid)
+        if preference == .automatic && device.prefersDigitalVolumeControl {
+            return .digital
+        }
+        return preference
+    }
+
+    func setVolumeControlPreference(_ preference: VolumeControlPreference, for device: AudioDevice) {
+        priorityManager.setVolumeControlPreference(preference, for: device.uid)
+        if device.id == currentOutputId || device.id == currentInputId {
+            refreshVolume()
+            refreshInputGain()
+            objectWillChange.send()
+        }
+    }
+
+    private func usesDigitalVolume(for device: AudioDevice) -> Bool {
+        switch volumeControlPreference(for: device) {
+        case .digital: return true
+        case .device: return false
+        case .automatic: return device.supportsSystemVolumeControl
+        }
+    }
+
     func refreshVolume() {
         volume = deviceService.getOutputVolume()
     }
 
+    func refreshInputGain() {
+        inputGain = deviceService.getInputVolume()
+    }
+
     func refreshMuteStatus() {
-        var muted: Set<AudioObjectID> = []
+        var muted: Set<String> = []
         for device in inputDevices where device.isConnected {
             if deviceService.isDeviceMuted(device.id, type: .input) {
-                muted.insert(device.id)
+                muted.insert(muteKey(for: device))
             }
         }
         for device in speakerDevices where device.isConnected {
             if deviceService.isDeviceMuted(device.id, type: .output) {
-                muted.insert(device.id)
+                muted.insert(muteKey(for: device))
             }
         }
         for device in headphoneDevices where device.isConnected {
             if deviceService.isDeviceMuted(device.id, type: .output) {
-                muted.insert(device.id)
+                muted.insert(muteKey(for: device))
             }
         }
-        mutedDeviceIds = muted
+        mutedDeviceKeys = muted.union(softwareMutedInputKeys).union(softwareMutedOutputKeys)
         if let outputId = currentOutputId {
-            isActiveOutputMuted = muted.contains(outputId)
+            isActiveOutputMuted = muted.contains { $0 == "output:\(outputId)" }
         } else {
             isActiveOutputMuted = false
         }
         if let inputId = currentInputId {
-            isActiveInputMuted = muted.contains(inputId)
+            isActiveInputMuted = muted.contains { $0 == "input:\(inputId)" }
         } else {
             isActiveInputMuted = false
         }
@@ -143,12 +239,109 @@ class AudioManager: ObservableObject {
     }
 
     func isDeviceMuted(_ device: AudioDevice) -> Bool {
-        mutedDeviceIds.contains(device.id)
+        mutedDeviceKeys.contains(muteKey(for: device))
+    }
+
+    private func muteKey(for device: AudioDevice) -> String {
+        "\(device.type.rawValue):\(device.id)"
     }
 
     func setVolume(_ newVolume: Float) {
+        guard currentOutputSupportsSystemVolumeControl else { return }
         volume = newVolume
-        deviceService.setOutputVolume(newVolume)
+        let force = currentOutputDevice.map { volumeControlPreference(for: $0) == .digital } ?? false
+        deviceService.setOutputVolume(newVolume, force: force)
+        saveLevel(newVolume, for: currentOutputId, type: .output)
+    }
+
+    func setInputGain(_ newGain: Float) {
+        guard currentInputSupportsSystemVolumeControl else { return }
+        inputGain = newGain
+        let force = currentInputDevice.map { volumeControlPreference(for: $0) == .digital } ?? false
+        deviceService.setInputVolume(newGain, force: force)
+        saveLevel(newGain, for: currentInputId, type: .input)
+    }
+
+    func setPerDeviceLevelsEnabled(_ enabled: Bool) {
+        perDeviceLevelsEnabled = enabled
+        priorityManager.areDeviceLevelsEnabled = enabled
+        if enabled {
+            restoreLevel(for: currentOutputId, type: .output)
+            restoreLevel(for: currentInputId, type: .input)
+        }
+    }
+
+    func setEnormousMode(_ enabled: Bool) {
+        isEnormousMode = enabled
+        priorityManager.isEnormousMode = enabled
+    }
+
+    var allConnectedOutputDevices: [AudioDevice] {
+        var seen = Set<String>()
+        return (speakerDevices + headphoneDevices + hiddenSpeakerDevices + hiddenHeadphoneDevices)
+            .filter { $0.isConnected && seen.insert("\($0.type.rawValue):\($0.uid)").inserted }
+    }
+
+    var areAllOutputsMuted: Bool {
+        let devices = allConnectedOutputDevices
+        return !devices.isEmpty && devices.allSatisfy { isDeviceMuted($0) }
+    }
+
+    var allConnectedInputDevices: [AudioDevice] {
+        var seen = Set<String>()
+        return (inputDevices + hiddenInputDevices)
+            .filter { $0.isConnected && seen.insert("\($0.type.rawValue):\($0.uid)").inserted }
+    }
+
+    var areAllInputsMuted: Bool {
+        let devices = allConnectedInputDevices
+        return !devices.isEmpty && devices.allSatisfy { isDeviceMuted($0) }
+    }
+
+    func setAllOutputsMuted(_ muted: Bool) {
+        for device in allConnectedOutputDevices {
+            let key = muteKey(for: device)
+            if muted {
+                if !softwareMutedOutputKeys.contains(key) {
+                    savedOutputVolumes[key] = deviceService.getDeviceVolume(device.id, type: .output)
+                }
+                let hardwareMuted = deviceService.setDeviceMuted(true, deviceId: device.id, type: .output)
+                let volumeMuted = deviceService.setDeviceVolume(0, deviceId: device.id, type: .output, force: true)
+                if hardwareMuted || volumeMuted {
+                    softwareMutedOutputKeys.insert(key)
+                }
+            } else {
+                _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: .output)
+                if let savedVolume = savedOutputVolumes.removeValue(forKey: key) {
+                    _ = deviceService.setDeviceVolume(savedVolume, deviceId: device.id, type: .output, force: true)
+                }
+                softwareMutedOutputKeys.remove(key)
+            }
+        }
+        refreshMuteStatus()
+    }
+
+    func setAllInputsMuted(_ muted: Bool) {
+        for device in allConnectedInputDevices {
+            let key = muteKey(for: device)
+            if muted {
+                if !softwareMutedInputKeys.contains(key) {
+                    savedInputVolumes[key] = deviceService.getDeviceVolume(device.id, type: .input)
+                }
+                let hardwareMuted = deviceService.setDeviceMuted(true, deviceId: device.id, type: .input)
+                let volumeMuted = deviceService.setDeviceVolume(0, deviceId: device.id, type: .input, force: true)
+                if hardwareMuted || volumeMuted {
+                    softwareMutedInputKeys.insert(key)
+                }
+            } else {
+                _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: .input)
+                if let savedVolume = savedInputVolumes.removeValue(forKey: key) {
+                    _ = deviceService.setDeviceVolume(savedVolume, deviceId: device.id, type: .input, force: true)
+                }
+                softwareMutedInputKeys.remove(key)
+            }
+        }
+        refreshMuteStatus()
     }
 
     var activeOutputDevices: [AudioDevice] {
@@ -161,15 +354,30 @@ class AudioManager: ObservableObject {
     init() {
         currentMode = priorityManager.currentMode
         isCustomMode = priorityManager.isCustomMode
+        perDeviceLevelsEnabled = priorityManager.areDeviceLevelsEnabled
+        isEnormousMode = priorityManager.isEnormousMode
         refreshDevices()
         previousConnectedUIDs = connectedDeviceUIDs  // Initialize tracking
         refreshVolume()
+        refreshInputGain()
         refreshMuteStatus()
         setupDeviceChangeListener()
         setupMuteVolumeListener()
+        requestMicrophoneAccessIfNeeded()
         if !isCustomMode {
             applyHighestPriorityInput()
             applyHighestPriorityOutput()
+        }
+    }
+
+    private func requestMicrophoneAccessIfNeeded() {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else { return }
+        AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+            Task { @MainActor in
+                // CoreAudio hides input streams until permission has been answered.
+                self?.refreshDevices()
+                self?.refreshMuteStatus()
+            }
         }
     }
 
@@ -184,12 +392,18 @@ class AudioManager: ObservableObject {
     private func handleMuteOrVolumeChange() {
         refreshMuteStatus()
         refreshVolume()
+        refreshInputGain()
     }
 
     func refreshDevices() {
         let allConnectedDevices = deviceService.getDevices()
         connectedDeviceUIDs = Set(allConnectedDevices.map { $0.uid })
         for device in allConnectedDevices {
+            priorityManager.migrateDeviceUIDIfNeeded(
+                uid: device.uid,
+                name: device.name,
+                isInput: device.type == .input
+            )
             priorityManager.rememberDevice(device.uid, name: device.name, isInput: device.type == .input)
         }
         let connectedInputs = allConnectedDevices.filter { $0.type == .input }
@@ -385,14 +599,62 @@ class AudioManager: ObservableObject {
         applyOutputDevice(device)
     }
 
+    /// Select an output and its category as one operation. Changing the mode
+    /// first would briefly apply priority-one output, which is visible as a
+    /// bounce and can override combined input/output devices such as USB
+    /// microphones with headphone outputs.
+    func selectOutputDevice(_ device: AudioDevice, category: OutputCategory, applyMode: Bool = true) {
+        if applyMode {
+            currentMode = category
+            priorityManager.currentMode = category
+        }
+        applyOutputDevice(device)
+    }
+
     private func applyInputDevice(_ device: AudioDevice) {
+        if let currentInputId {
+            saveLevel(deviceService.getDeviceVolume(currentInputId, type: .input), for: currentInputId, type: .input)
+        }
         deviceService.setDefaultDevice(device.id, type: .input)
         currentInputId = device.id
+        restoreLevel(for: currentInputId, type: .input)
     }
 
     private func applyOutputDevice(_ device: AudioDevice) {
+        if let currentOutputId {
+            saveLevel(deviceService.getDeviceVolume(currentOutputId), for: currentOutputId, type: .output)
+        }
         deviceService.setDefaultDevice(device.id, type: .output)
         currentOutputId = device.id
+        restoreLevel(for: currentOutputId, type: .output)
+    }
+
+    private func device(withId id: AudioObjectID?, type: AudioDeviceType) -> AudioDevice? {
+        guard let id else { return nil }
+        return (inputDevices + speakerDevices + headphoneDevices).first {
+            $0.id == id && $0.type == type
+        }
+    }
+
+    private var currentOutputDevice: AudioDevice? { device(withId: currentOutputId, type: .output) }
+    private var currentInputDevice: AudioDevice? { device(withId: currentInputId, type: .input) }
+
+    private func saveLevel(_ level: Float, for id: AudioObjectID?, type: AudioDeviceType) {
+        guard perDeviceLevelsEnabled, let device = device(withId: id, type: type) else { return }
+        guard usesDigitalVolume(for: device) else { return }
+        priorityManager.saveDeviceLevel(level, for: device.uid)
+    }
+
+    private func restoreLevel(for id: AudioObjectID?, type: AudioDeviceType) {
+        guard perDeviceLevelsEnabled, let device = device(withId: id, type: type) else { return }
+        guard usesDigitalVolume(for: device) else { return }
+        if let level = priorityManager.deviceLevel(for: device.uid) {
+            let force = volumeControlPreference(for: device) == .digital
+            if type == .output { deviceService.setOutputVolume(level, force: force); volume = level }
+            else { deviceService.setInputVolume(level, force: force); inputGain = level }
+        } else {
+            saveLevel(deviceService.getDeviceVolume(device.id, type: type), for: id, type: type)
+        }
     }
 
     private func applyHighestPriorityInput() {
