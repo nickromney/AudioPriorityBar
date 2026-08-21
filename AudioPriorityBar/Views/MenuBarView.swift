@@ -24,29 +24,20 @@ enum DeviceTab: Hashable {
     }
 }
 
-enum MenuBarPresentation {
-    case menuBar
-    case workspace
-}
-
 struct MenuBarView: View {
     @EnvironmentObject var audioManager: AudioManager
-    let presentation: MenuBarPresentation
     @State private var selectedTab: DeviceTab = .speaker
     @State private var showingSettings = false
 
-    init(presentation: MenuBarPresentation = .menuBar) {
-        self.presentation = presentation
-    }
-
-    private var usesLargeLayout: Bool {
-        presentation == .workspace || audioManager.isEnormousMode
-    }
+    private let popoverWidth: CGFloat = 480
+    private let listHeight: CGFloat = 480
+    private let gutter: CGFloat = 16
 
     var body: some View {
         VStack(spacing: 0) {
             if showingSettings {
-                SettingsPanel(showingSettings: $showingSettings)
+                SettingsPanel()
+                    .frame(height: listHeight)
             } else {
             // Header with mode toggle and volume
             VStack(spacing: 14) {
@@ -55,207 +46,39 @@ struct MenuBarView: View {
                     if audioManager.currentInputSupportsSystemVolumeControl {
                         InputGainSliderView()
                     } else {
-                        HardwareLevelNotice(text: "Use the device controls for level")
+                        HardwareLevelNotice(text: "Use this device’s hardware controls")
                     }
                 } else {
                     if audioManager.currentOutputSupportsSystemVolumeControl {
                         VolumeSliderView()
                     } else {
-                        HardwareLevelNotice(text: "Use the device controls for volume")
+                        HardwareLevelNotice(text: "Use this device’s hardware controls")
                     }
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, gutter)
             .padding(.vertical, 14)
             .background(Color.primary.opacity(0.02))
 
             Divider()
-                .padding(.horizontal, 12)
+                .padding(.horizontal, gutter)
 
             ScrollView {
                 VStack(spacing: 20) {
-                    if usesLargeLayout {
-                        EnormousDeviceGrid(
-                            icon: selectedTab.icon,
-                            devices: selectedTab == .speaker ? audioManager.speakerDevices :
-                                (selectedTab == .headphone ? audioManager.headphoneDevices : audioManager.inputDevices),
-                            currentDeviceId: selectedTab == .microphone ? audioManager.currentInputId : audioManager.currentOutputId,
-                            onSelect: { device in
-                                if selectedTab == .microphone {
-                                    audioManager.setInputDevice(device)
-                                } else {
-                                    audioManager.selectOutputDevice(device, category: selectedTab == .speaker ? .speaker : .headphone)
-                                }
-                            }
-                        )
-                    } else {
-                    // Speakers (show in speaker mode or custom mode)
-                    if selectedTab == .speaker || audioManager.isCustomMode {
-                        DeviceSectionView(
-                            title: "Speakers",
-                            icon: "speaker.wave.2.fill",
-                            devices: audioManager.speakerDevices,
-                            currentDeviceId: audioManager.currentOutputId,
-                            onMove: audioManager.moveSpeakerDevice,
-                            onSelect: { device in
-                                selectedTab = .speaker
-                                audioManager.selectOutputDevice(device, category: .speaker, applyMode: !audioManager.isCustomMode)
-                            },
-                            onHide: { audioManager.hideDevice($0, category: .speaker) },
-                            onUnhide: { audioManager.unhideDevice($0, category: .speaker) },
-                            category: .speaker,
-                            showCategoryPicker: true,
-                            isActiveCategory: audioManager.currentMode == .speaker || audioManager.isCustomMode
-                        )
-                    }
-
-                    // Headphones (show in headphone mode or custom mode)
-                    if selectedTab == .headphone || audioManager.isCustomMode {
-                        DeviceSectionView(
-                            title: "Headphones",
-                            icon: "headphones",
-                            devices: audioManager.headphoneDevices,
-                            currentDeviceId: audioManager.currentOutputId,
-                            onMove: audioManager.moveHeadphoneDevice,
-                            onSelect: { device in
-                                selectedTab = .headphone
-                                audioManager.selectOutputDevice(device, category: .headphone, applyMode: !audioManager.isCustomMode)
-                            },
-                            onHide: { audioManager.hideDevice($0, category: .headphone) },
-                            onUnhide: { audioManager.unhideDevice($0, category: .headphone) },
-                            category: .headphone,
-                            showCategoryPicker: true,
-                            isActiveCategory: audioManager.currentMode == .headphone || audioManager.isCustomMode
-                        )
-                    }
-
-                    if selectedTab == .microphone || audioManager.isCustomMode {
-                        DeviceSectionView(
-                        title: "Microphones",
-                        icon: "mic.fill",
-                        devices: audioManager.inputDevices,
-                        currentDeviceId: audioManager.currentInputId,
-                        onMove: audioManager.moveInputDevice,
-                        onSelect: audioManager.setInputDevice,
-                        onHide: { audioManager.hideDevice($0, category: nil) },
-                        onUnhide: { audioManager.unhideDevice($0, category: nil) },
-                        category: nil,
-                        showCategoryPicker: false
-                        )
-                    }
-
-                    }
+                    deviceListContent
                 }
-                .padding(.horizontal, 16)
                 .padding(.vertical, 14)
             }
-            // Keep the popover geometry stable while switching tabs. The list
-            // scrolls inside this fixed-height viewport instead of resizing the
-            // menu-bar window around each tab's content.
-            .frame(height: usesLargeLayout ? enormousDeviceListHeight : 420)
+            .padding(.horizontal, gutter)
+            .frame(height: listHeight)
 
             Divider()
-                .padding(.horizontal, 12)
+                .padding(.horizontal, gutter)
             }
 
-            // Footer: settings get their own full-width rows so the final
-            // action row remains calm and readable.
-            VStack(spacing: 6) {
-                if showingSettings {
-                    Button {
-                        showingSettings = false
-                    } label: {
-                        Label("Back to controls", systemImage: "chevron.left")
-                            .font(.system(size: 12, weight: .medium))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.accentColor)
-                } else {
-                    if !audioManager.isEditMode {
-                        HiddenDevicesToggleView()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                    }
-
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Label("Settings", systemImage: "gearshape")
-                            .font(.system(size: 12, weight: .medium))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.secondary)
-
-                    if presentation == .menuBar {
-                        Button {
-                            WorkspaceWindowController.shared.show(audioManager: audioManager)
-                        } label: {
-                            Label("Open Large Window", systemImage: "macwindow.on.rectangle")
-                                .font(.system(size: 12, weight: .medium))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.secondary)
-                    }
-                }
-
-                HStack(spacing: 10) {
-                    Spacer()
-
-                    // Edit mode toggle
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            audioManager.toggleEditMode()
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: audioManager.isEditMode ? "checkmark.circle.fill" : "pencil.circle")
-                                .font(.system(size: 12))
-                            Text(audioManager.isEditMode ? "Done" : "Edit")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .fixedSize(horizontal: true, vertical: false)
-                        .foregroundColor(audioManager.isEditMode ? .accentColor : .secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .animation(.easeInOut(duration: 0.2), value: audioManager.isEditMode)
-
-                    // Quit is deliberately labelled; an unlabeled close icon
-                    // is too easy to mistake for dismissing the popover.
-                    Button {
-                        NSApplication.shared.terminate(nil)
-                    } label: {
-                        Text("Quit AudioPriorityBar")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Quit AudioPriorityBar")
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .animation(.easeInOut(duration: 0.2), value: audioManager.isEditMode)
-
-            if !showingSettings {
-                if usesLargeLayout {
-                    VStack(spacing: 12) {
-                        OutputMuteStatusView()
-                        MuteAllButton()
-                        MuteMicrophonesButton()
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 14)
-                } else {
-                    CompactEmergencyControlsView()
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 10)
-                }
-            }
+            BottomChrome(showingSettings: $showingSettings)
         }
-        .frame(width: usesLargeLayout ? 560 : 340)
+        .frame(width: popoverWidth)
         .onAppear {
             selectedTab = audioManager.defaultOutputCategory == .headphone ? .headphone : .speaker
         }
@@ -266,81 +89,276 @@ struct MenuBarView: View {
         }
         // Keep the MenuBarExtra window intrinsic. On newer macOS releases a
         // ScrollView with only a max height can otherwise collapse to zero.
-        .fixedSize(horizontal: false, vertical: true)
+        .fixedSize(horizontal: true, vertical: true)
     }
 
-    private var enormousDeviceListHeight: CGFloat {
-        guard usesLargeLayout else { return 420 }
+    @ViewBuilder
+    private var deviceListContent: some View {
+        if audioManager.isEditMode {
+            compactDeviceSections
+        } else if audioManager.isCustomMode {
+            EnormousDeviceGrid(
+                title: "Speakers",
+                icon: "speaker.wave.2.fill",
+                devices: audioManager.speakerDevices,
+                currentDeviceId: audioManager.currentOutputId,
+                category: .speaker,
+                showCategoryPicker: true,
+                onSelect: { audioManager.selectOutputDevice($0, category: .speaker, applyMode: false) },
+                onCycle: { audioManager.cycleOutputPresentation($0, category: .speaker) },
+                onMove: audioManager.moveSpeakerDevice,
+                onHide: { audioManager.hideDevice($0, category: .speaker) }
+            )
+            EnormousDeviceGrid(
+                title: "Headphones",
+                icon: "headphones",
+                devices: audioManager.headphoneDevices,
+                currentDeviceId: audioManager.currentOutputId,
+                category: .headphone,
+                showCategoryPicker: true,
+                onSelect: { audioManager.selectOutputDevice($0, category: .headphone, applyMode: false) },
+                onCycle: { audioManager.cycleOutputPresentation($0, category: .headphone) },
+                onMove: audioManager.moveHeadphoneDevice,
+                onHide: { audioManager.hideDevice($0, category: .headphone) }
+            )
+            EnormousDeviceGrid(
+                title: "Microphones",
+                icon: "mic.fill",
+                devices: audioManager.inputDevices,
+                currentDeviceId: audioManager.currentInputId,
+                onSelect: audioManager.setInputDevice,
+                onMove: audioManager.moveInputDevice,
+                onHide: { audioManager.hideDevice($0, category: nil) }
+            )
+        } else {
+            EnormousDeviceGrid(
+                icon: selectedTab.icon,
+                devices: selectedTab == .speaker ? audioManager.speakerDevices :
+                    (selectedTab == .headphone ? audioManager.headphoneDevices : audioManager.inputDevices),
+                currentDeviceId: selectedTab == .microphone ? audioManager.currentInputId : audioManager.currentOutputId,
+                category: selectedTab == .speaker ? .speaker : (selectedTab == .headphone ? .headphone : nil),
+                showCategoryPicker: selectedTab != .microphone,
+                onSelect: { device in
+                    if selectedTab == .microphone {
+                        audioManager.setInputDevice(device)
+                    } else {
+                        audioManager.selectOutputDevice(device, category: selectedTab == .speaker ? .speaker : .headphone)
+                    }
+                },
+                onCycle: selectedTab == .microphone ? nil : { device in
+                    audioManager.cycleOutputPresentation(
+                        device,
+                        category: selectedTab == .speaker ? .speaker : .headphone
+                    )
+                },
+                onMove: selectedTab == .speaker ? audioManager.moveSpeakerDevice :
+                    (selectedTab == .headphone ? audioManager.moveHeadphoneDevice : audioManager.moveInputDevice),
+                onHide: { device in
+                    if selectedTab == .microphone {
+                        audioManager.hideDevice(device, category: nil)
+                    } else {
+                        audioManager.hideDevice(device, category: selectedTab == .speaker ? .speaker : .headphone)
+                    }
+                }
+            )
+        }
+    }
 
-        // Size from the largest category, not the selected tab. This keeps
-        // the emergency controls anchored while switching between tabs.
-        let largestDeviceCount = max(
-            audioManager.speakerDevices.count,
-            audioManager.headphoneDevices.count,
-            audioManager.inputDevices.count
-        )
-        return max(320, CGFloat(largestDeviceCount) * 96 + 28)
+    @ViewBuilder
+    private var compactDeviceSections: some View {
+        if selectedTab == .speaker || audioManager.isCustomMode {
+            DeviceSectionView(
+                title: "Speakers",
+                icon: "speaker.wave.2.fill",
+                devices: audioManager.speakerDevices,
+                currentDeviceId: audioManager.currentOutputId,
+                onMove: audioManager.moveSpeakerDevice,
+                onSelect: { device in
+                    selectedTab = .speaker
+                    audioManager.selectOutputDevice(device, category: .speaker, applyMode: !audioManager.isCustomMode)
+                },
+                onHide: { audioManager.hideDevice($0, category: .speaker) },
+                onUnhide: { audioManager.unhideDevice($0, category: .speaker) },
+                category: .speaker,
+                showCategoryPicker: true,
+                isActiveCategory: audioManager.currentMode == .speaker || audioManager.isCustomMode
+            )
+        }
+
+        if selectedTab == .headphone || audioManager.isCustomMode {
+            DeviceSectionView(
+                title: "Headphones",
+                icon: "headphones",
+                devices: audioManager.headphoneDevices,
+                currentDeviceId: audioManager.currentOutputId,
+                onMove: audioManager.moveHeadphoneDevice,
+                onSelect: { device in
+                    selectedTab = .headphone
+                    audioManager.selectOutputDevice(device, category: .headphone, applyMode: !audioManager.isCustomMode)
+                },
+                onHide: { audioManager.hideDevice($0, category: .headphone) },
+                onUnhide: { audioManager.unhideDevice($0, category: .headphone) },
+                category: .headphone,
+                showCategoryPicker: true,
+                isActiveCategory: audioManager.currentMode == .headphone || audioManager.isCustomMode
+            )
+        }
+
+        if selectedTab == .microphone || audioManager.isCustomMode {
+            DeviceSectionView(
+                title: "Microphones",
+                icon: "mic.fill",
+                devices: audioManager.inputDevices,
+                currentDeviceId: audioManager.currentInputId,
+                onMove: audioManager.moveInputDevice,
+                onSelect: audioManager.setInputDevice,
+                onHide: { audioManager.hideDevice($0, category: nil) },
+                onUnhide: { audioManager.unhideDevice($0, category: nil) },
+                category: nil,
+                showCategoryPicker: false
+            )
+        }
     }
 }
 
 struct EnormousDeviceGrid: View {
     @EnvironmentObject var audioManager: AudioManager
+    var title: String? = nil
     let icon: String
     let devices: [AudioDevice]
     let currentDeviceId: AudioObjectID?
+    var category: OutputCategory? = nil
+    var showCategoryPicker: Bool = false
     let onSelect: (AudioDevice) -> Void
+    var onCycle: ((AudioDevice) -> Void)? = nil
+    var onMove: ((IndexSet, Int) -> Void)? = nil
+    var onHide: ((AudioDevice) -> Void)? = nil
+
+    @State private var dropTargetUID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if let title {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.accentColor)
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                }
+            }
+
             if devices.isEmpty {
-                Text("No connected devices")
+                Text("No devices connected")
                     .font(.system(size: 16))
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 100)
             } else {
                 VStack(spacing: 12) {
-                    ForEach(Array(devices.enumerated()), id: \.element.id) { index, device in
-                        let isSelected = device.id == currentDeviceId
-                        Button {
-                            onSelect(device)
-                        } label: {
-                            HStack(spacing: 16) {
-                                Image(systemName: cardIcon(for: device, isSelected: isSelected))
-                                    .font(.system(size: 24))
-                                .frame(width: 48)
-
-                                Text("\(index + 1)")
-                                    .font(.system(size: 16, weight: .bold, design: .monospaced))
-                                    .frame(width: 24)
-
-                                Text(device.name)
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                                Spacer(minLength: 0)
-                            }
-                            .foregroundColor(isSelected ? .white : .primary)
-                            .padding(16)
-                            .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(isSelected ? Color.accentColor : Color.primary.opacity(0.08))
-                            )
-                        }
-                        .buttonStyle(.plain)
+                    ForEach(Array(devices.enumerated()), id: \.element.uid) { index, device in
+                        deviceCard(index: index, device: device)
                     }
                 }
             }
         }
     }
 
-    private func cardIcon(for device: AudioDevice, isSelected: Bool) -> String {
-        if isSelected {
-            return "checkmark.circle.fill"
+    private func deviceCard(index: Int, device: AudioDevice) -> some View {
+        let isSelected = device.id == currentDeviceId
+        let isMuted = audioManager.isDeviceMuted(device)
+        let isDropTarget = dropTargetUID == device.uid
+        return HStack(spacing: 16) {
+            Image(systemName: cardIcon(for: device, isMuted: isMuted))
+                .font(.system(size: 24))
+                .frame(width: 48)
+
+            DeviceDragHandle(
+                index: index,
+                uid: device.uid,
+                isLarge: true,
+                foreground: isSelected ? .white : .secondary
+            )
+
+            Text(device.name)
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 22))
+            }
         }
-        if audioManager.isDeviceMuted(device) {
+        .foregroundColor(isSelected ? .white : .primary)
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(isSelected ? Color.accentColor : Color.primary.opacity(0.08))
+        )
+        .overlay(alignment: .top) {
+            if isDropTarget {
+                DropIndicatorLine()
+                    .padding(.horizontal, 8)
+                    .offset(y: -8)
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(isDropTarget ? Color.accentColor : Color.clear, lineWidth: 2)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            onCycle?(device)
+        }
+        .onTapGesture(count: 1) {
+            onSelect(device)
+        }
+        .dropDestination(for: String.self) { items, _ in
+            drop(items, onto: device)
+        } isTargeted: { targeted in
+            dropTargetUID = targeted ? device.uid : nil
+        }
+        .contextMenu {
+            DeviceContextMenu(
+                device: device,
+                category: category,
+                showCategoryPicker: showCategoryPicker,
+                onHide: onHide
+            )
+        }
+        .help(cardHelp(isSelected: isSelected, isMuted: isMuted))
+    }
+
+    private func cardHelp(isSelected: Bool, isMuted: Bool) -> String {
+        guard onCycle != nil else { return "Click to listen. Drag the numbered handle to reorder." }
+        if !isSelected {
+            return "Click to listen. Double-click cycles mute, then switch away."
+        }
+        if isMuted {
+            return "Muted. Double-click to switch to another device."
+        }
+        return "Click to listen. Double-click to mute."
+    }
+
+    private func drop(_ uids: [String], onto device: AudioDevice) -> Bool {
+        guard let onMove,
+              let draggedUID = uids.first,
+              let move = DeviceReorder.move(
+                draggingUID: draggedUID,
+                ontoUID: device.uid,
+                in: devices.map(\.uid)
+              ) else { return false }
+        onMove(move.from, move.to)
+        return true
+    }
+
+    private func cardIcon(for device: AudioDevice, isMuted: Bool) -> String {
+        if isMuted {
             return device.type == .input ? "mic.slash.fill" : "speaker.slash.fill"
         }
         return icon
@@ -359,12 +377,11 @@ struct MuteAllButton: View {
                     .font(.system(size: 25, weight: .bold))
                     .frame(width: 32, height: 30)
 
-                Text(audioManager.areAllOutputsMuted ? "Unmute All Audio Output" : "Mute All Audio Output")
+                Text(audioManager.areAllOutputsMuted ? "Unmute All Output" : "Mute All Output")
                     .font(.system(size: 23, weight: .bold))
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(width: 360, alignment: .leading)
-                Spacer()
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .foregroundColor(.white)
             .padding(.horizontal, 22)
@@ -377,7 +394,7 @@ struct MuteAllButton: View {
         .buttonStyle(.plain)
         .animation(nil, value: audioManager.areAllOutputsMuted)
         .disabled(audioManager.allConnectedOutputDevices.isEmpty)
-        .help(audioManager.areAllOutputsMuted ? "Unmute all audio output" : "Mute all audio output")
+        .help(audioManager.areAllOutputsMuted ? "Unmute all output" : "Mute all output")
     }
 }
 
@@ -400,10 +417,8 @@ struct MuteMicrophonesButton: View {
                 Text(audioManager.areAllInputsMuted ? "Unmute All Microphones" : "Mute All Microphones")
                     .font(.system(size: 23, weight: .bold))
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(width: 360, alignment: .leading)
-
-                Spacer()
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .foregroundColor(.white)
             .padding(.horizontal, 22)
@@ -416,58 +431,6 @@ struct MuteMicrophonesButton: View {
         .buttonStyle(.plain)
         .disabled(audioManager.allConnectedInputDevices.isEmpty)
         .help(audioManager.areAllInputsMuted ? "Unmute all microphones" : "Mute all microphones")
-    }
-}
-
-struct CompactEmergencyControlsView: View {
-    @EnvironmentObject var audioManager: AudioManager
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Divider()
-
-            HStack(spacing: 8) {
-                CompactMuteButton(
-                    title: audioManager.areAllOutputsMuted ? "Unmute All Audio Output" : "Mute All Audio Output",
-                    icon: audioManager.areAllOutputsMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                    color: audioManager.areAllOutputsMuted ? .green : .red,
-                    isDisabled: audioManager.allConnectedOutputDevices.isEmpty,
-                    action: { audioManager.setAllOutputsMuted(!audioManager.areAllOutputsMuted) }
-                )
-
-                CompactMuteButton(
-                    title: audioManager.areAllInputsMuted ? "Unmute All Microphones" : "Mute All Microphones",
-                    icon: audioManager.areAllInputsMuted ? "mic.slash.fill" : "mic.fill",
-                    color: audioManager.areAllInputsMuted ? .green : .orange,
-                    isDisabled: audioManager.allConnectedInputDevices.isEmpty,
-                    action: { audioManager.setAllInputsMuted(!audioManager.areAllInputsMuted) }
-                )
-            }
-        }
-        .padding(.top, 4)
-    }
-}
-
-private struct CompactMuteButton: View {
-    let title: String
-    let icon: String
-    let color: Color
-    let isDisabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: icon)
-                .font(.system(size: 11, weight: .semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(maxWidth: .infinity, minHeight: 34)
-                .foregroundColor(color)
-                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.4 : 1)
     }
 }
 
@@ -491,45 +454,26 @@ struct OutputMuteStatusView: View {
 
     private var statusText: String {
         if audioManager.allConnectedOutputDevices.isEmpty {
-            return "No audio output available"
+            return "No output connected"
         }
-        return audioManager.areAllOutputsMuted ? "Audio output is muted" : "Audio output is available"
+        return audioManager.areAllOutputsMuted ? "Output is muted" : "Output is live"
     }
 }
 
 struct SettingsPanel: View {
     @EnvironmentObject var audioManager: AudioManager
-    @Binding var showingSettings: Bool
+    @StateObject private var launchManager = LaunchAtLoginManager.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Label("Settings", systemImage: "gearshape.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                Spacer()
-            }
-
-            Divider()
-
-            HStack(spacing: 8) {
-                ControlModeChoice(
-                    title: "Enormous controls",
-                    descriptor: "Large emergency controls",
-                    isSelected: audioManager.isEnormousMode,
-                    action: { audioManager.setEnormousMode(true) }
-                )
-                ControlModeChoice(
-                    title: "Subtle controls",
-                    descriptor: "Compact controls",
-                    isSelected: !audioManager.isEnormousMode,
-                    action: { audioManager.setEnormousMode(false) }
-                )
-            }
+        VStack(alignment: .leading, spacing: 22) {
+            Text("Settings")
+                .font(.system(size: 22, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Show first")
-                    .font(.system(size: 16, weight: .semibold))
-                Picker("Show first", selection: Binding(
+                Text("Open to")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Picker("Open to", selection: Binding(
                     get: { audioManager.defaultOutputCategory },
                     set: { audioManager.defaultOutputCategory = $0 }
                 )) {
@@ -537,54 +481,207 @@ struct SettingsPanel: View {
                     Text("Headphones").tag(OutputCategory.headphone)
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
             }
 
-            PerDeviceLevelsToggle()
-                .font(.system(size: 16))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            SettingsToggleRow(
+                title: "Remember volume per device",
+                subtitle: "Restore each device’s last level when you switch",
+                isOn: Binding(
+                    get: { audioManager.perDeviceLevelsEnabled },
+                    set: { audioManager.setPerDeviceLevelsEnabled($0) }
+                )
+            )
 
-            LaunchAtLoginToggle()
-                .font(.system(size: 16))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            SettingsToggleRow(
+                title: "Keep muted when switching",
+                subtitle: "Stay muted when you select another speaker or headphone. Off means the device you pick comes up live.",
+                isOn: Binding(
+                    get: { audioManager.keepMutedWhenChangingSelection },
+                    set: { audioManager.setKeepMutedWhenChangingSelection($0) }
+                )
+            )
 
-            Spacer()
+            if launchManager.canManageLaunchAtLogin {
+                SettingsToggleRow(
+                    title: "Open at login",
+                    subtitle: "Start Audio Priority Bar when you sign in",
+                    isOn: $launchManager.isEnabled
+                )
+            }
+
+            Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(height: 420, alignment: .top)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }
 
-private struct ControlModeChoice: View {
+private struct SettingsToggleRow: View {
     let title: String
-    let descriptor: String
-    let isSelected: Bool
+    let subtitle: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .padding(.vertical, 4)
+    }
+}
+
+private struct BottomChrome: View {
+    @EnvironmentObject var audioManager: AudioManager
+    @Binding var showingSettings: Bool
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if !showingSettings {
+                if !audioManager.isEditMode {
+                    HiddenDevicesToggleView()
+                }
+
+                muteControls
+            }
+
+            actionGrid
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.primary.opacity(0.03))
+        .animation(.easeInOut(duration: 0.2), value: audioManager.isEditMode)
+    }
+
+    @ViewBuilder
+    private var muteControls: some View {
+        VStack(spacing: 8) {
+            OutputMuteStatusView()
+            MuteAllButton()
+            MuteMicrophonesButton()
+        }
+        .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private var actionGrid: some View {
+        if showingSettings {
+            HStack(spacing: 6) {
+                backTile
+                relaunchTile
+                quitTile
+            }
+        } else {
+            VStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    settingsTile
+                    editTile
+                }
+                HStack(spacing: 6) {
+                    relaunchTile
+                    quitTile
+                }
+            }
+        }
+    }
+
+    private var settingsTile: some View {
+        ControlActionTile(title: "Settings", systemImage: "gearshape") {
+            showingSettings = true
+        }
+    }
+
+    private var editTile: some View {
+        ControlActionTile(
+            title: audioManager.isEditMode ? "Done" : "Edit",
+            systemImage: audioManager.isEditMode ? "checkmark" : "pencil",
+            prominence: audioManager.isEditMode ? .accent : .regular
+        ) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                audioManager.toggleEditMode()
+            }
+        }
+        .help(audioManager.isEditMode ? "Finish editing" : "Reorder and hide devices")
+    }
+
+    private var backTile: some View {
+        ControlActionTile(title: "Back", systemImage: "chevron.left", prominence: .accent) {
+            showingSettings = false
+        }
+        .help("Back to controls")
+    }
+
+    private var relaunchTile: some View {
+        ControlActionTile(title: "Relaunch", systemImage: "arrow.triangle.2.circlepath") {
+            AppProcess.relaunch()
+        }
+        .help("Quit and open Audio Priority Bar again")
+    }
+
+    private var quitTile: some View {
+        ControlActionTile(title: "Quit", systemImage: "power", prominence: .quiet) {
+            NSApplication.shared.terminate(nil)
+        }
+        .help("Quit Audio Priority Bar")
+    }
+}
+
+private struct ControlActionTile: View {
+    let title: String
+    let systemImage: String
+    var prominence: Prominence = .regular
     let action: () -> Void
+    @State private var isHovering = false
+
+    enum Prominence {
+        case regular
+        case accent
+        case quiet
+    }
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
+            HStack(spacing: 7) {
+                Image(systemName: systemImage)
                     .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 16)
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
-                Text(descriptor)
-                    .font(.system(size: 10))
-                    .foregroundColor(isSelected ? .primary.opacity(0.75) : .secondary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1)
-            )
+            .foregroundStyle(foreground)
+            .background(fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
+    }
+
+    private var foreground: Color {
+        switch prominence {
+        case .accent: return .accentColor
+        case .quiet: return .secondary
+        case .regular: return isHovering ? .primary : .secondary
+        }
+    }
+
+    private var fill: Color {
+        if prominence == .accent {
+            return Color.accentColor.opacity(isHovering ? 0.18 : 0.12)
+        }
+        return Color.primary.opacity(isHovering ? 0.10 : 0.055)
     }
 }
 
@@ -609,14 +706,14 @@ struct ModeToggleView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: tab.icon)
-                            .font(.system(size: audioManager.isEnormousMode ? 18 : 11))
+                            .font(.system(size: 18))
                         Text(tab.label)
-                            .font(.system(size: audioManager.isEnormousMode ? 17 : 11, weight: .medium))
+                            .font(.system(size: 17, weight: .medium))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
-                    .padding(.horizontal, audioManager.isEnormousMode ? 12 : 7)
-                    .padding(.vertical, audioManager.isEnormousMode ? 17 : 8)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 17)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                     .background(
@@ -635,9 +732,9 @@ struct ModeToggleView: View {
                 }
             } label: {
                 Image(systemName: "hand.raised.fill")
-                    .font(.system(size: audioManager.isEnormousMode ? 18 : 12))
-                    .padding(.horizontal, audioManager.isEnormousMode ? 18 : 12)
-                    .padding(.vertical, audioManager.isEnormousMode ? 17 : 8)
+                    .font(.system(size: 18))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 17)
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: 10)
@@ -646,10 +743,11 @@ struct ModeToggleView: View {
                     .foregroundColor(audioManager.isCustomMode ? .white : .secondary)
             }
             .buttonStyle(.plain)
-            .help("Manual mode - disable auto-switching")
+            .help("Manual — choose devices yourself")
+            .accessibilityLabel("Manual")
         }
         .padding(4)
-        .frame(height: audioManager.isEnormousMode ? 70 : 36)
+        .frame(height: 70)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color.primary.opacity(0.05))
@@ -671,7 +769,11 @@ struct VolumeSliderView: View {
     }
 
     var isMuted: Bool {
-        audioManager.volume <= 0 || audioManager.isActiveOutputMuted
+        VolumeSliderView.showsMutedIcon(volume: audioManager.volume)
+    }
+
+    static func showsMutedIcon(volume: Float) -> Bool {
+        volume <= 0.01
     }
 
     var body: some View {
@@ -764,31 +866,6 @@ struct HardwareLevelNotice: View {
     }
 }
 
-struct PerDeviceLevelsToggle: View {
-    @EnvironmentObject var audioManager: AudioManager
-
-    var body: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                audioManager.setPerDeviceLevelsEnabled(!audioManager.perDeviceLevelsEnabled)
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: audioManager.perDeviceLevelsEnabled ? "slider.horizontal.3" : "slider.horizontal.3")
-                    .font(.system(size: 12))
-                Text("Remember levels per device")
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .fixedSize(horizontal: true, vertical: false)
-            .foregroundColor(audioManager.perDeviceLevelsEnabled ? .accentColor : .secondary)
-        }
-        .buttonStyle(.plain)
-        .help(audioManager.perDeviceLevelsEnabled
-            ? "Disable remembering volume and microphone levels per device"
-            : "Remember volume and microphone levels separately for each device")
-    }
-}
-
 // Scroll wheel modifier
 struct ScrollWheelModifier: ViewModifier {
     let onScroll: (CGFloat) -> Void
@@ -855,7 +932,7 @@ struct DeviceSectionView: View {
             }
 
             if devices.isEmpty {
-                Text("No devices")
+                Text("No devices connected")
                     .font(.system(size: 13))
                     .foregroundColor(.secondary.opacity(0.7))
                     .italic()
@@ -889,25 +966,28 @@ struct HiddenDevicesToggleView: View {
 
     var body: some View {
         if allHiddenDevices.isEmpty {
-            Text("")
-                .frame(height: 1)
+            EmptyView()
         } else {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     isExpanded.toggle()
                 }
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 7) {
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 16)
+                    Text(allHiddenDevices.count == 1 ? "1 ignored device" : "\(allHiddenDevices.count) ignored devices")
+                        .font(.system(size: 12, weight: .medium))
+                    Spacer(minLength: 0)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    Image(systemName: "eye.slash")
-                        .font(.system(size: 11))
-                    Text("\(allHiddenDevices.count) ignored")
-                        .font(.system(size: 12))
                 }
-                .fixedSize(horizontal: true, vertical: false)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                .padding(.horizontal, 10)
+                .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             .buttonStyle(.plain)
             .popover(isPresented: $isExpanded, arrowEdge: .bottom) {
@@ -961,7 +1041,7 @@ struct HiddenDeviceRow: View {
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Stop ignoring")
+                .help("Show again")
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
         }
@@ -976,31 +1056,6 @@ struct HiddenDeviceRow: View {
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
             }
-        }
-    }
-}
-
-struct LaunchAtLoginToggle: View {
-    @StateObject private var launchManager = LaunchAtLoginManager.shared
-    
-    var body: some View {
-        if launchManager.canManageLaunchAtLogin {
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    launchManager.isEnabled.toggle()
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: launchManager.isEnabled ? "power.circle.fill" : "power.circle")
-                        .font(.system(size: 12))
-                    Text("Automatically start at login")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .fixedSize(horizontal: true, vertical: false)
-                .foregroundColor(launchManager.isEnabled ? .accentColor : .secondary)
-            }
-            .buttonStyle(.plain)
-            .help(launchManager.isEnabled ? "Do not open at startup" : "Open at startup")
         }
     }
 }

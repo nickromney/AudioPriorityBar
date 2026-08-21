@@ -172,10 +172,10 @@ class AudioDeviceService: AudioDeviceServicing {
             return volume
         }
 
-        // Some devices, notably HDMI displays, expose volume per output
-        // channel rather than through the virtual main-volume property.
-        let channelVolumes = (1...2).compactMap { element in
-            readVolume(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope, element: AudioObjectPropertyElement(element))
+        // HDMI / display devices often expose scalar volume on many channels,
+        // not just a stereo pair or a virtual main volume.
+        let channelVolumes = volumeElements(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope).compactMap { element in
+            readVolume(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope, element: element)
         }
         return channelVolumes.first ?? 1.0
     }
@@ -183,16 +183,27 @@ class AudioDeviceService: AudioDeviceServicing {
     @discardableResult
     func setDeviceVolume(_ volume: Float, deviceId: AudioObjectID, type: AudioDeviceType, force: Bool = false) -> Bool {
         let scope = type == .input ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput
+        let requireSettable = !force
+        var didWrite = writeVolume(
+            deviceId: deviceId,
+            selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            scope: scope,
+            element: kAudioObjectPropertyElementMain,
+            volume: volume,
+            requireSettable: requireSettable
+        )
 
-        if writeVolume(deviceId: deviceId, selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume, scope: scope, element: kAudioObjectPropertyElementMain, volume: volume, requireSettable: !force) {
-            return true
-        }
-
-        // Fall back to the writable left/right scalar volume controls used by
-        // some HDMI and display audio devices.
-        var didWrite = false
-        for element in 1...2 {
-            didWrite = writeVolume(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope, element: AudioObjectPropertyElement(element), volume: volume, requireSettable: !force) || didWrite
+        // Write every scalar channel as well. Some displays accept a virtual
+        // main-volume write that does not actually change the heard level.
+        for element in volumeElements(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope) {
+            didWrite = writeVolume(
+                deviceId: deviceId,
+                selector: kAudioDevicePropertyVolumeScalar,
+                scope: scope,
+                element: element,
+                volume: volume,
+                requireSettable: requireSettable
+            ) || didWrite
         }
         return didWrite
     }
@@ -202,8 +213,23 @@ class AudioDeviceService: AudioDeviceServicing {
         if isVolumeSettable(deviceId: deviceId, selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume, scope: scope, element: kAudioObjectPropertyElementMain) {
             return true
         }
-        return (1...2).contains { element in
-            isVolumeSettable(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope, element: AudioObjectPropertyElement(element))
+        return volumeElements(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope).contains { element in
+            isVolumeSettable(deviceId: deviceId, selector: kAudioDevicePropertyVolumeScalar, scope: scope, element: element)
+        }
+    }
+
+    private func volumeElements(
+        deviceId: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope
+    ) -> [AudioObjectPropertyElement] {
+        var elements: [AudioObjectPropertyElement] = [kAudioObjectPropertyElementMain]
+        for index in 1...16 {
+            elements.append(AudioObjectPropertyElement(index))
+        }
+        return elements.filter { element in
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
+            return AudioObjectHasProperty(deviceId, &address)
         }
     }
 
@@ -293,13 +319,12 @@ class AudioDeviceService: AudioDeviceServicing {
             : kAudioDevicePropertyScopeOutput
 
         var didWrite = false
-        for element in [kAudioObjectPropertyElementMain, AudioObjectPropertyElement(1), AudioObjectPropertyElement(2)] {
+        for element in volumeElements(deviceId: deviceId, selector: kAudioDevicePropertyMute, scope: scope) {
             var address = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyMute,
                 mScope: scope,
                 mElement: element
             )
-            guard AudioObjectHasProperty(deviceId, &address) else { continue }
             var value: UInt32 = muted ? 1 : 0
             let size = UInt32(MemoryLayout<UInt32>.size)
             didWrite = AudioObjectSetPropertyData(deviceId, &address, 0, nil, size, &value) == noErr || didWrite

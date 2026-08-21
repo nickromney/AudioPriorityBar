@@ -84,5 +84,6 @@ final class PriorityManagerTests: XCTestCase {
         XCTAssertTrue(manager.areDeviceLevelsEnabled)
         XCTAssertTrue(manager.isEnormousMode)
         XCTAssertFalse(manager.isCustomMode)
+        XCTAssertFalse(manager.keepMutedWhenChangingSelection)
     }
 }

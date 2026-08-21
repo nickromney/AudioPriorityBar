@@ -21,6 +21,7 @@ let package = Package(
             ],
             sources: [
                 "Models/AudioDevice.swift",
+                "Models/DeviceReorder.swift",
                 "Models/Headphones.swift",
                 "Services/PriorityManager.swift"
             ]

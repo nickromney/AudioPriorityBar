@@ -51,6 +51,7 @@ class PriorityManager {
     private let volumeControlPreferencesKey = "volumeControlPreferences"
     private let defaultOutputCategoryKey = "defaultOutputCategory"
     private let enormousModeKey = "enormousMode"
+    private let keepMutedWhenChangingSelectionKey = "keepMutedWhenChangingSelection"
 
     // MARK: - Known Devices (Persistent Memory)
 
@@ -162,6 +163,11 @@ class PriorityManager {
             return defaults.bool(forKey: deviceLevelsEnabledKey)
         }
         set { defaults.set(newValue, forKey: deviceLevelsEnabledKey) }
+    }
+
+    var keepMutedWhenChangingSelection: Bool {
+        get { defaults.bool(forKey: keepMutedWhenChangingSelectionKey) }
+        set { defaults.set(newValue, forKey: keepMutedWhenChangingSelectionKey) }
     }
 
     func deviceLevel(for uid: String) -> Float? {

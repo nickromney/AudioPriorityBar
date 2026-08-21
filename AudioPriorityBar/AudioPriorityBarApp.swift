@@ -29,39 +29,33 @@ final class SingleInstanceGuard {
     }
 
     deinit {
-        if fileDescriptor >= 0 {
-            flock(fileDescriptor, LOCK_UN)
-            close(fileDescriptor)
-        }
+        release()
+    }
+
+    func release() {
+        guard fileDescriptor >= 0 else { return }
+        flock(fileDescriptor, LOCK_UN)
+        close(fileDescriptor)
+        fileDescriptor = -1
     }
 }
 
-@MainActor
-final class WorkspaceWindowController {
-    static let shared = WorkspaceWindowController()
+enum AppProcess {
+    static func relaunchConfiguration() -> NSWorkspace.OpenConfiguration {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = true
+        return configuration
+    }
 
-    private var window: NSWindow?
-
-    func show(audioManager: AudioManager) {
-        if let window {
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
-            return
+    static func relaunch() {
+        let bundleURL = Bundle.main.bundleURL
+        SingleInstanceGuard.shared.release()
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: relaunchConfiguration()) { _, _ in
+            DispatchQueue.main.async {
+                NSApplication.shared.terminate(nil)
+            }
         }
-
-        let contentView = MenuBarView(presentation: .workspace)
-            .environmentObject(audioManager)
-        let hostingController = NSHostingController(rootView: contentView)
-        let window = NSWindow(contentViewController: hostingController)
-        window.title = "AudioPriorityBar"
-        window.setContentSize(NSSize(width: 560, height: 760))
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.isReleasedWhenClosed = false
-        window.center()
-        self.window = window
-
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -80,7 +74,7 @@ struct AudioPriorityBarApp: App {
     
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView(presentation: .menuBar)
+            MenuBarView()
                 .environmentObject(audioManager)
         } label: {
             Image(systemName: "speaker.wave.2.fill")
@@ -166,6 +160,7 @@ class AudioManager: ObservableObject {
     @Published var isActiveInputMuted: Bool = false
     @Published var micFlashState: Bool = false
     @Published var isEnormousMode: Bool
+    @Published var keepMutedWhenChangingSelection: Bool
 
     private let deviceService: any AudioDeviceServicing
     private var micFlashTimer: Timer?
@@ -173,8 +168,14 @@ class AudioManager: ObservableObject {
     private var softwareMutedOutputKeys: Set<String> = []
     private var savedInputVolumes: [String: Float] = [:]
     private var savedOutputVolumes: [String: Float] = [:]
+    private var muteAllOutputsEngaged = false
     let priorityManager: PriorityManager
     private var connectedDeviceUIDs: Set<String> = []
+    /// Unfiltered connected devices, including USB interface twins that are
+    /// collapsed to one row in the visible lists. Mute-all still addresses
+    /// every HAL object so a hidden twin cannot keep playing.
+    private var connectedOutputsForControl: [AudioDevice] = []
+    private var connectedInputsForControl: [AudioDevice] = []
 
     var menuBarIcon: String {
         currentMode.icon
@@ -247,7 +248,9 @@ class AudioManager: ObservableObject {
         }
         mutedDeviceKeys = muted.union(softwareMutedInputKeys).union(softwareMutedOutputKeys)
         if let outputId = currentOutputId {
-            isActiveOutputMuted = mutedDeviceKeys.contains("output:\(outputId)")
+            isActiveOutputMuted = volume <= 0.01 && (
+                muteAllOutputsEngaged || mutedDeviceKeys.contains("output:\(outputId)")
+            )
         } else {
             isActiveOutputMuted = false
         }
@@ -270,19 +273,38 @@ class AudioManager: ObservableObject {
     }
 
     func isDeviceMuted(_ device: AudioDevice) -> Bool {
-        mutedDeviceKeys.contains(muteKey(for: device))
+        if deviceService.getDeviceVolume(device.id, type: device.type) > 0.01 {
+            return false
+        }
+        if device.type == .output && muteAllOutputsEngaged { return true }
+        return mutedDeviceKeys.contains(muteKey(for: device))
     }
 
     private func muteKey(for device: AudioDevice) -> String {
         "\(device.type.rawValue):\(device.id)"
     }
 
+    private func uniquedForControl(_ devices: [AudioDevice]) -> [AudioDevice] {
+        var seen = Set<String>()
+        return devices.filter { $0.isConnected && seen.insert("\($0.type.rawValue):\($0.uid)").inserted }
+    }
+
     func setVolume(_ newVolume: Float) {
         guard currentOutputSupportsSystemVolumeControl else { return }
+        if newVolume > 0.01 {
+            muteAllOutputsEngaged = false
+            if let device = currentOutputDevice {
+                _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: .output)
+                softwareMutedOutputKeys.remove(muteKey(for: device))
+            }
+        }
         volume = newVolume
-        let force = currentOutputDevice.map { volumeControlPreference(for: $0) == .digital } ?? false
-        deviceService.setOutputVolume(newVolume, force: force)
+        deviceService.setOutputVolume(newVolume, force: true)
+        if let outputId = currentOutputId {
+            _ = deviceService.setDeviceVolume(newVolume, deviceId: outputId, type: .output, force: true)
+        }
         saveLevel(newVolume, for: currentOutputId, type: .output)
+        refreshMuteStatus()
     }
 
     func setInputGain(_ newGain: Float) {
@@ -307,21 +329,23 @@ class AudioManager: ObservableObject {
         priorityManager.isEnormousMode = enabled
     }
 
+    func setKeepMutedWhenChangingSelection(_ enabled: Bool) {
+        keepMutedWhenChangingSelection = enabled
+        priorityManager.keepMutedWhenChangingSelection = enabled
+    }
+
     var allConnectedOutputDevices: [AudioDevice] {
-        var seen = Set<String>()
-        return (speakerDevices + headphoneDevices + hiddenSpeakerDevices + hiddenHeadphoneDevices)
-            .filter { $0.isConnected && seen.insert("\($0.type.rawValue):\($0.uid)").inserted }
+        uniquedForControl(connectedOutputsForControl)
     }
 
     var areAllOutputsMuted: Bool {
+        if muteAllOutputsEngaged { return true }
         let devices = allConnectedOutputDevices
         return !devices.isEmpty && devices.allSatisfy { isDeviceMuted($0) }
     }
 
     var allConnectedInputDevices: [AudioDevice] {
-        var seen = Set<String>()
-        return (inputDevices + hiddenInputDevices)
-            .filter { $0.isConnected && seen.insert("\($0.type.rawValue):\($0.uid)").inserted }
+        uniquedForControl(connectedInputsForControl)
     }
 
     var areAllInputsMuted: Bool {
@@ -330,28 +354,12 @@ class AudioManager: ObservableObject {
     }
 
     func setAllOutputsMuted(_ muted: Bool) {
-        for device in allConnectedOutputDevices {
-            let key = muteKey(for: device)
-            if muted {
-                if !softwareMutedOutputKeys.contains(key) {
-                    savedOutputVolumes[key] = deviceService.getDeviceVolume(device.id, type: .output)
-                }
-                let hardwareMuted = deviceService.setDeviceMuted(true, deviceId: device.id, type: .output)
-                let volumeMuted = deviceService.setDeviceVolume(0, deviceId: device.id, type: .output, force: true)
-                if hardwareMuted || volumeMuted {
-                    softwareMutedOutputKeys.insert(key)
-                }
-            } else {
-                _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: .output)
-                let savedVolume = savedOutputVolumes.removeValue(forKey: key)
-                let currentVolume = deviceService.getDeviceVolume(device.id, type: .output)
-                let restoredVolume = savedVolume
-                    ?? (currentVolume > 0.01 ? currentVolume : max(volume, 0.5))
-                _ = deviceService.setDeviceVolume(restoredVolume, deviceId: device.id, type: .output, force: true)
-                softwareMutedOutputKeys.remove(key)
-            }
+        muteAllOutputsEngaged = muted
+        for device in connectedOutputsForControl {
+            applyOutputMute(muted, to: device)
         }
         refreshMuteStatus()
+        refreshVolume()
     }
 
     func setAllInputsMuted(_ muted: Bool) {
@@ -394,6 +402,7 @@ class AudioManager: ObservableObject {
         isCustomMode = priorityManager.isCustomMode
         perDeviceLevelsEnabled = priorityManager.areDeviceLevelsEnabled
         isEnormousMode = priorityManager.isEnormousMode
+        keepMutedWhenChangingSelection = priorityManager.keepMutedWhenChangingSelection
         refreshDevices()
         previousConnectedUIDs = connectedDeviceUIDs  // Initialize tracking
         refreshVolume()
@@ -444,8 +453,16 @@ class AudioManager: ObservableObject {
             )
             priorityManager.rememberDevice(device.uid, name: device.name, isInput: device.type == .input)
         }
-        let connectedInputs = allConnectedDevices.filter { $0.type == .input }
-        let connectedOutputs = allConnectedDevices.filter { $0.type == .output }
+        connectedInputsForControl = allConnectedDevices.filter { $0.type == .input }
+        connectedOutputsForControl = allConnectedDevices.filter { $0.type == .output }
+        let connectedInputs = AudioDevice.uniqued(
+            connectedInputsForControl,
+            preferring: deviceService.getCurrentDefaultDevice(type: .input)
+        )
+        let connectedOutputs = AudioDevice.uniqued(
+            connectedOutputsForControl,
+            preferring: deviceService.getCurrentDefaultDevice(type: .output)
+        )
 
         if isEditMode {
             let knownDevices = priorityManager.getKnownDevices()
@@ -646,7 +663,65 @@ class AudioManager: ObservableObject {
             currentMode = category
             priorityManager.currentMode = category
         }
-        applyOutputDevice(device)
+        applyOutputDevice(device, makeAudible: !keepMutedWhenChangingSelection)
+    }
+
+    func cycleOutputPresentation(_ device: AudioDevice, category: OutputCategory) {
+        switch outputPresentation(for: device) {
+        case .unselected:
+            selectOutputDevice(device, category: category)
+        case .unmuted:
+            applyOutputMute(true, to: device)
+            refreshMuteStatus()
+            refreshVolume()
+        case .muted:
+            let pool = category == .headphone ? headphoneDevices : speakerDevices
+            if let next = pool.first(where: { $0.isConnected && $0.id != device.id }) {
+                selectOutputDevice(next, category: category)
+            }
+        }
+    }
+
+    func outputPresentation(for device: AudioDevice) -> OutputPresentation {
+        guard device.id == currentOutputId else { return .unselected }
+        return isDeviceMuted(device) ? .muted : .unmuted
+    }
+
+    private func applyOutputMute(_ muted: Bool, to device: AudioDevice) {
+        let key = muteKey(for: device)
+        if muted {
+            let current = deviceService.getDeviceVolume(device.id, type: .output)
+            if current > 0.01 {
+                savedOutputVolumes[key] = current
+            }
+            _ = deviceService.setDeviceMuted(true, deviceId: device.id, type: .output)
+            _ = deviceService.setDeviceVolume(0, deviceId: device.id, type: .output, force: true)
+            if device.id == currentOutputId {
+                deviceService.setOutputVolume(0, force: true)
+                volume = 0
+            }
+            softwareMutedOutputKeys.insert(key)
+        } else {
+            _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: .output)
+            let restored = Self.usableRestoredVolume(
+                saved: savedOutputVolumes.removeValue(forKey: key),
+                current: deviceService.getDeviceVolume(device.id, type: .output),
+                fallback: volume
+            )
+            _ = deviceService.setDeviceVolume(restored, deviceId: device.id, type: .output, force: true)
+            if device.id == currentOutputId {
+                deviceService.setOutputVolume(restored, force: true)
+                volume = restored
+            }
+            softwareMutedOutputKeys.remove(key)
+        }
+    }
+
+    static func usableRestoredVolume(saved: Float?, current: Float, fallback: Float) -> Float {
+        if let saved, saved > 0.01 { return saved }
+        if current > 0.01 { return current }
+        if fallback > 0.01 { return fallback }
+        return 0.5
     }
 
     private func applyInputDevice(_ device: AudioDevice) {
@@ -658,13 +733,38 @@ class AudioManager: ObservableObject {
         restoreLevel(for: currentInputId, type: .input)
     }
 
-    private func applyOutputDevice(_ device: AudioDevice) {
+    private func applyOutputDevice(_ device: AudioDevice, makeAudible: Bool = false) {
         if let currentOutputId {
             saveLevel(deviceService.getDeviceVolume(currentOutputId), for: currentOutputId, type: .output)
         }
         deviceService.setDefaultDevice(device.id, type: .output)
         currentOutputId = device.id
-        restoreLevel(for: currentOutputId, type: .output)
+        if makeAudible {
+            muteAllOutputsEngaged = false
+            makeOutputAudible(device)
+            refreshMuteStatus()
+        } else if muteAllOutputsEngaged {
+            applyOutputMute(true, to: device)
+            refreshMuteStatus()
+            refreshVolume()
+        } else {
+            restoreLevel(for: currentOutputId, type: .output)
+            refreshMuteStatus()
+            refreshVolume()
+        }
+    }
+
+    private func makeOutputAudible(_ device: AudioDevice) {
+        _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: .output)
+        softwareMutedOutputKeys.remove(muteKey(for: device))
+        let restored = Self.usableRestoredVolume(
+            saved: perDeviceLevelsEnabled ? priorityManager.deviceLevel(for: device.uid) : nil,
+            current: deviceService.getDeviceVolume(device.id, type: .output),
+            fallback: volume
+        )
+        _ = deviceService.setDeviceVolume(restored, deviceId: device.id, type: .output, force: true)
+        deviceService.setOutputVolume(restored, force: true)
+        volume = restored
     }
 
     private func device(withId id: AudioObjectID?, type: AudioDeviceType) -> AudioDevice? {
@@ -678,6 +778,7 @@ class AudioManager: ObservableObject {
     private var currentInputDevice: AudioDevice? { device(withId: currentInputId, type: .input) }
 
     private func saveLevel(_ level: Float, for id: AudioObjectID?, type: AudioDeviceType) {
+        guard level > 0.01 else { return }
         guard perDeviceLevelsEnabled, let device = device(withId: id, type: type) else { return }
         guard usesDigitalVolume(for: device) else { return }
         priorityManager.saveDeviceLevel(level, for: device.uid)
