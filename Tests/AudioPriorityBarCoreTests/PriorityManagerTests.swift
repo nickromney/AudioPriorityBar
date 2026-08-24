@@ -85,6 +85,7 @@ final class PriorityManagerTests: XCTestCase {
         XCTAssertTrue(manager.isEnormousMode)
         XCTAssertFalse(manager.isCustomMode)
         XCTAssertFalse(manager.keepMutedWhenChangingSelection)
+        XCTAssertTrue(manager.keepApplicationInForegroundAfterSourceChange)
     }
 }
 

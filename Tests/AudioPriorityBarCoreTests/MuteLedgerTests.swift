@@ -15,6 +15,25 @@ final class MuteLedgerTests: XCTestCase {
         XCTAssertFalse(ledger.wantsMuted(mic))
     }
 
+    func testMuteAllInputLatchCoversInputsButNotOutputs() {
+        var ledger = MuteLedger()
+        ledger.engageAllInputs()
+
+        XCTAssertTrue(ledger.wantsMuted(mic))
+        XCTAssertFalse(ledger.wantsMuted(macMini))
+    }
+
+    func testReleasingAllInputsClearsTheInputLatchAndIntents() {
+        var ledger = MuteLedger()
+        ledger.engageAllInputs()
+        ledger.setIntent(muted: true, for: mic)
+
+        ledger.releaseAllInputs()
+
+        XCTAssertFalse(ledger.allInputsEngaged)
+        XCTAssertFalse(ledger.wantsMuted(mic))
+    }
+
     func testReleasingTheLatchKeepsIndividuallyMutedDevicesMuted() {
         var ledger = MuteLedger()
         ledger.setIntent(muted: true, for: display)
@@ -25,6 +44,20 @@ final class MuteLedgerTests: XCTestCase {
 
         XCTAssertFalse(ledger.wantsMuted(macMini), "the latch silenced it, so releasing the latch frees it")
         XCTAssertTrue(ledger.wantsMuted(display), "the user muted this one by hand")
+    }
+
+    func testSelectionIntentCanBeReplacedWithoutClearingAnExplicitMute() {
+        var ledger = MuteLedger()
+        ledger.setSelectionIntent(muted: true, for: macMini)
+        ledger.setSelectionIntent(muted: false, for: macMini)
+        ledger.setSelectionIntent(muted: true, for: display)
+
+        XCTAssertFalse(ledger.wantsMuted(macMini))
+        XCTAssertTrue(ledger.wantsMuted(display))
+
+        ledger.setIntent(muted: true, for: macMini)
+        ledger.setSelectionIntent(muted: false, for: macMini)
+        XCTAssertTrue(ledger.wantsMuted(macMini))
     }
 
     func testOnlyLatchMutedDevicesAreRestoredWhenTheLatchDrops() {

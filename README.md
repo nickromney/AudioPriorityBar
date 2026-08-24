@@ -32,7 +32,7 @@ A native macOS menu bar app that automatically manages audio device priorities. 
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/tobi/AudioPriorityBar.git
+   git clone https://github.com/nickromney/AudioPriorityBar.git
    cd AudioPriorityBar
    ```
 
@@ -46,7 +46,7 @@ A native macOS menu bar app that automatically manages audio device priorities. 
 Or open `AudioPriorityBar.xcodeproj` in Xcode and build with ⌘R.
 
 ### Download Release
-Check the [Releases](https://github.com/tobi/AudioPriorityBar/releases) page for pre-built binaries.
+Check the [Releases](https://github.com/nickromney/AudioPriorityBar/releases) page for pre-built binaries.
 
 ## Usage
 

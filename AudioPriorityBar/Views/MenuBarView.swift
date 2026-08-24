@@ -440,6 +440,7 @@ struct MuteAllButton: View {
             title: audioManager.areAllOutputsMuted ? "Unmute All Output" : "Mute All Output",
             systemImage: audioManager.areAllOutputsMuted ? "speaker.slash.fill" : "speaker.wave.3.fill",
             tint: audioManager.areAllOutputsMuted ? .green : .red,
+            heightMultiplier: 2,
             isDisabled: audioManager.allConnectedOutputDevices.isEmpty
         ) {
             audioManager.setAllOutputsMuted(!audioManager.areAllOutputsMuted)
@@ -460,6 +461,7 @@ struct MuteMicrophonesButton: View {
             title: audioManager.areAllInputsMuted ? "Unmute All Microphones" : "Mute All Microphones",
             systemImage: Self.iconName(isMuted: audioManager.areAllInputsMuted),
             tint: audioManager.areAllInputsMuted ? .green : .orange,
+            heightMultiplier: 2,
             isDisabled: audioManager.allConnectedInputDevices.isEmpty
         ) {
             audioManager.setAllInputsMuted(!audioManager.areAllInputsMuted)
@@ -471,6 +473,7 @@ private struct EmergencyButton: View {
     let title: String
     let systemImage: String
     let tint: Color
+    var heightMultiplier: CGFloat = 1
     var isDisabled: Bool = false
     let action: () -> Void
 
@@ -492,7 +495,10 @@ private struct EmergencyButton: View {
             }
             .foregroundColor(.white)
             .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: PanelMetrics.controlHeight)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: PanelMetrics.controlHeight * heightMultiplier
+            )
             .background(
                 RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
                     .fill(tint.opacity(isHovering ? 1 : 0.9))
@@ -580,7 +586,7 @@ struct SettingsPanel: View {
 
             SettingsToggleRow(
                 title: "Switch to built-in output to mute",
-                subtitle: "Some displays and audio interfaces ignore mute. Mute All moves audio to the built-in speakers and mutes those instead, then hands it back when you unmute.",
+                subtitle: "If this device ignores mute, switch to Mac speakers so muting works.",
                 isOn: Binding(
                     get: { audioManager.redirectMuteAllToBuiltIn },
                     set: { audioManager.setRedirectMuteAllToBuiltIn($0) }
@@ -593,6 +599,15 @@ struct SettingsPanel: View {
                 isOn: Binding(
                     get: { audioManager.perDeviceLevelsEnabled },
                     set: { audioManager.setPerDeviceLevelsEnabled($0) }
+                )
+            )
+
+            SettingsToggleRow(
+                title: "Keep panel open after changing source",
+                subtitle: "On (default): keep it open to listen and confirm; new outputs start muted. Off: switch outputs audibly and close.",
+                isOn: Binding(
+                    get: { audioManager.keepApplicationInForegroundAfterSourceChange },
+                    set: { audioManager.setKeepApplicationInForegroundAfterSourceChange($0) }
                 )
             )
 
@@ -617,7 +632,7 @@ private struct SettingsToggleRow: View {
     @Binding var isOn: Bool
 
     var body: some View {
-        Toggle(isOn: $isOn) {
+        HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
@@ -626,9 +641,15 @@ private struct SettingsToggleRow: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            Spacer(minLength: 0)
+
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .accessibilityLabel(title)
+                .toggleStyle(.switch)
+                .controlSize(.small)
         }
-        .toggleStyle(.switch)
-        .controlSize(.small)
         .padding(.vertical, 4)
     }
 }
@@ -659,8 +680,10 @@ private struct BottomChrome: View {
     private var muteControls: some View {
         VStack(spacing: 8) {
             OutputMuteStatusView()
-            MuteAllButton()
-            MuteMicrophonesButton()
+            HStack(spacing: 8) {
+                MuteAllButton()
+                MuteMicrophonesButton()
+            }
         }
         .padding(.bottom, 4)
     }

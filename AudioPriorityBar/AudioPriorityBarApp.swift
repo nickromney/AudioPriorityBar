@@ -62,10 +62,34 @@ enum AppProcess {
 
     static func relaunch() {
         let bundleURL = Bundle.main.bundleURL
+        let executableURL = bundleURL
+            .appendingPathComponent("Contents")
+            .appendingPathComponent("MacOS")
+            .appendingPathComponent("AudioPriorityBar")
         SingleInstanceGuard.shared.release()
-        NSWorkspace.shared.openApplication(at: bundleURL, configuration: relaunchConfiguration()) { _, _ in
-            DispatchQueue.main.async {
+
+        // LaunchServices can resolve an already-running LSUIElement app back
+        // to the existing process, even with createsNewApplicationInstance.
+        // Starting the installed executable directly makes Relaunch reliable
+        // for both the LaunchAgent copy and a manually opened app bundle.
+        do {
+            let process = Process()
+            process.executableURL = executableURL
+            process.currentDirectoryURL = bundleURL
+            try process.run()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 NSApplication.shared.terminate(nil)
+            }
+        } catch {
+            // Keep LaunchServices as a fallback for unusual bundle layouts.
+            NSWorkspace.shared.openApplication(at: bundleURL, configuration: relaunchConfiguration()) { application, error in
+                guard application != nil, error == nil else {
+                    print("AudioPriorityBar relaunch failed: \(error?.localizedDescription ?? "unknown error")")
+                    return
+                }
+                DispatchQueue.main.async {
+                    NSApplication.shared.terminate(nil)
+                }
             }
         }
     }
@@ -174,6 +198,7 @@ class AudioManager: ObservableObject {
     @Published var micFlashState: Bool = false
     @Published var isEnormousMode: Bool
     @Published var redirectMuteAllToBuiltIn: Bool
+    @Published var keepApplicationInForegroundAfterSourceChange: Bool
     /// Set when Mute All had to move audio elsewhere to guarantee silence, so
     /// the panel can say where it went.
     @Published var redirectedOutputName: String?
@@ -357,6 +382,11 @@ class AudioManager: ObservableObject {
         priorityManager.redirectMuteAllToBuiltIn = enabled
     }
 
+    func setKeepApplicationInForegroundAfterSourceChange(_ enabled: Bool) {
+        keepApplicationInForegroundAfterSourceChange = enabled
+        priorityManager.keepApplicationInForegroundAfterSourceChange = enabled
+    }
+
     func setEnormousMode(_ enabled: Bool) {
         isEnormousMode = enabled
         priorityManager.isEnormousMode = enabled
@@ -380,6 +410,7 @@ class AudioManager: ObservableObject {
     }
 
     var areAllInputsMuted: Bool {
+        if ledger.allInputsEngaged { return true }
         let devices = allConnectedInputDevices
         return !devices.isEmpty && devices.allSatisfy { isDeviceMuted($0) }
     }
@@ -407,9 +438,13 @@ class AudioManager: ObservableObject {
     }
 
     func setAllInputsMuted(_ muted: Bool) {
+        if muted {
+            ledger.engageAllInputs()
+        } else {
+            ledger.releaseAllInputs()
+        }
         for device in allConnectedInputDevices {
             if muted {
-                ledger.setIntent(muted: true, for: device.muteKey)
                 silence(device)
             } else {
                 restore(device)
@@ -546,6 +581,7 @@ class AudioManager: ObservableObject {
         perDeviceLevelsEnabled = priorityManager.areDeviceLevelsEnabled
         isEnormousMode = priorityManager.isEnormousMode
         redirectMuteAllToBuiltIn = priorityManager.redirectMuteAllToBuiltIn
+        keepApplicationInForegroundAfterSourceChange = priorityManager.keepApplicationInForegroundAfterSourceChange
         refreshDevices()
         previousConnectedUIDs = connectedDeviceUIDs  // Initialize tracking
         refreshVolume()
@@ -812,11 +848,15 @@ class AudioManager: ObservableObject {
     }
 
     func setInputDevice(_ device: AudioDevice) {
+        let sourceChanged = device.id != currentInputId
         applyInputDevice(device)
+        if sourceChanged { keepApplicationInForegroundIfNeeded() }
     }
 
     func setOutputDevice(_ device: AudioDevice) {
+        let sourceChanged = device.id != currentOutputId
         applyOutputDevice(device)
+        if sourceChanged { keepApplicationInForegroundIfNeeded() }
     }
 
     /// Select an output and its category as one operation. Changing the mode
@@ -824,15 +864,30 @@ class AudioManager: ObservableObject {
     /// bounce and can override combined input/output devices such as USB
     /// microphones with headphone outputs.
     func selectOutputDevice(_ device: AudioDevice, category: OutputCategory, applyMode: Bool = true) {
+        let sourceChanged = device.id != currentOutputId
         activateOutput(device, category: category, applyMode: applyMode, silent: false)
+        if sourceChanged { keepApplicationInForegroundIfNeeded() }
     }
 
-    /// Clicking a device walks it through three states: neutral, active but
-    /// silent, then active and audible.
+    /// With the panel kept open, clicking a device walks it through three
+    /// states: neutral, active but silent, then active and audible. When the
+    /// panel closes after a source change, the first click is a complete,
+    /// audible selection.
     ///
     /// Landing on a device silent is the point — choosing an output can then
     /// never blast sound at you, and the second click is the one that commits.
     func cycleOutputPresentation(_ device: AudioDevice, category: OutputCategory, applyMode: Bool = true) {
+        let previousOutputId = currentOutputId
+        let keepPanelOpen = keepApplicationInForegroundAfterSourceChange
+
+        // When the panel is going to close immediately, a source selection is
+        // a complete action. Do not leave the user on a newly selected but
+        // silent output they can no longer see.
+        if !keepPanelOpen, device.id != currentOutputId {
+            activateOutput(device, category: category, applyMode: applyMode, silent: false)
+            return
+        }
+
         switch outputPresentation(for: device) {
         case .unselected:
             activateOutput(device, category: category, applyMode: applyMode, silent: true)
@@ -843,10 +898,19 @@ class AudioManager: ObservableObject {
             // the list, also silent. With nowhere to hand over to, fall back to
             // muting so the click is never dead.
             if let next = nextConnectedOutput(after: device, in: category) {
-                activateOutput(next, category: category, applyMode: applyMode, silent: true)
+                activateOutput(next, category: category, applyMode: applyMode, silent: keepPanelOpen)
             } else {
                 toggleMute(for: device)
             }
+        }
+        if currentOutputId != previousOutputId { keepApplicationInForegroundIfNeeded() }
+    }
+
+    private func keepApplicationInForegroundIfNeeded() {
+        guard keepApplicationInForegroundAfterSourceChange else { return }
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.keyWindow?.makeKeyAndOrderFront(nil)
         }
     }
 
@@ -862,8 +926,14 @@ class AudioManager: ObservableObject {
             currentMode = category
             priorityManager.currentMode = category
         }
+        if silent, let outgoing = currentOutputDevice, outgoing.uid != device.uid {
+            // Do not let the first, protective click on every device leave a
+            // trail of mutes. Preserve explicit mute-button choices, but drop
+            // only the intent created by selecting the previous device.
+            ledger.setSelectionIntent(muted: false, for: outgoing.muteKey)
+        }
         if silent {
-            ledger.setIntent(muted: true, for: device.muteKey)
+            ledger.setSelectionIntent(muted: true, for: device.muteKey)
         }
         applyOutputDevice(device, makeAudible: !silent)
     }

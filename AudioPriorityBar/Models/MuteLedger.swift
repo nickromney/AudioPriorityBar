@@ -38,7 +38,9 @@ enum MuteOutcome: Equatable {
 /// ones the user muted individually alone.
 struct MuteLedger {
     private(set) var allOutputsEngaged = false
+    private(set) var allInputsEngaged = false
     private var deviceIntents: Set<MuteKey> = []
+    private var selectionIntents: Set<MuteKey> = []
     private var outcomes: [MuteKey: MuteOutcome] = [:]
     private var savedLevels: [MuteKey: Float] = [:]
 
@@ -49,8 +51,9 @@ struct MuteLedger {
     // MARK: - Intent
 
     func wantsMuted(_ key: MuteKey) -> Bool {
-        if deviceIntents.contains(key) { return true }
-        return allOutputsEngaged && key.type == .output
+        if deviceIntents.contains(key) || selectionIntents.contains(key) { return true }
+        if key.type == .output { return allOutputsEngaged }
+        return allInputsEngaged
     }
 
     /// True when the latch alone is silencing this device, so releasing the
@@ -61,11 +64,34 @@ struct MuteLedger {
 
     mutating func setIntent(muted: Bool, for key: MuteKey) {
         if muted {
+            selectionIntents.remove(key)
             deviceIntents.insert(key)
         } else {
             deviceIntents.remove(key)
+            selectionIntents.remove(key)
             outcomes.removeValue(forKey: key)
         }
+    }
+
+    /// Records the temporary silence applied by the output-selection gesture.
+    /// It is separate from a mute button intent so selecting another device
+    /// can release only the selection-created mute.
+    mutating func setSelectionIntent(muted: Bool, for key: MuteKey) {
+        if muted {
+            selectionIntents.insert(key)
+        } else {
+            selectionIntents.remove(key)
+            if !deviceIntents.contains(key) {
+                outcomes.removeValue(forKey: key)
+            }
+        }
+    }
+
+    mutating func clearSelectionIntents() {
+        for key in selectionIntents {
+            outcomes.removeValue(forKey: key)
+        }
+        selectionIntents.removeAll()
     }
 
     mutating func engageAllOutputs() {
@@ -91,6 +117,7 @@ struct MuteLedger {
         for key in outcomes.keys where key.type == .output {
             outcomes.removeValue(forKey: key)
         }
+        selectionIntents = selectionIntents.filter { $0.type != .output }
     }
 
     /// Turns the latch into an explicit intent on each device it was covering,
@@ -107,12 +134,17 @@ struct MuteLedger {
     }
 
     mutating func releaseAllInputs() {
+        allInputsEngaged = false
         for key in deviceIntents where key.type == .input {
             deviceIntents.remove(key)
         }
         for key in outcomes.keys where key.type == .input {
             outcomes.removeValue(forKey: key)
         }
+    }
+
+    mutating func engageAllInputs() {
+        allInputsEngaged = true
     }
 
     // MARK: - Hardware response

@@ -132,7 +132,7 @@ final class AudioPriorityBarTests: XCTestCase {
         let service = FakeAudioService(devices: [macMini, desk])
         let manager = AudioManager(
             deviceService: service,
-            priorityManager: PriorityManager(defaults: isolatedDefaults())
+            priorityManager: PriorityManager(defaults: isolatedDefaults(keepPanelOpen: true))
         )
         manager.selectOutputDevice(desk, category: .speaker)
         XCTAssertEqual(manager.outputPresentation(for: macMini), .unselected)
@@ -148,13 +148,30 @@ final class AudioPriorityBarTests: XCTestCase {
         XCTAssertGreaterThan(manager.volume, 0.01)
     }
 
+    func testAutoCloseSelectionMakesDifferentOutputAudible() {
+        let macMini = AudioDevice(id: 1, uid: "mac-mini", name: "Mac mini Speakers", type: .output)
+        let desk = AudioDevice(id: 2, uid: "desk", name: "Desk Speakers", type: .output)
+        let service = FakeAudioService(devices: [macMini, desk])
+        let manager = AudioManager(
+            deviceService: service,
+            priorityManager: PriorityManager(defaults: isolatedDefaults(keepPanelOpen: false))
+        )
+
+        manager.selectOutputDevice(desk, category: .speaker)
+        manager.cycleOutputPresentation(macMini, category: .speaker)
+
+        XCTAssertEqual(manager.currentOutputId, macMini.id)
+        XCTAssertTrue(service.isAudible(macMini.id))
+        XCTAssertFalse(manager.isDeviceMuted(macMini))
+    }
+
     func testAThirdClickHandsOverToTheNextDeviceSilently() {
         let macMini = AudioDevice(id: 1, uid: "mac-mini", name: "Mac mini Speakers", type: .output)
         let desk = AudioDevice(id: 2, uid: "desk", name: "Desk Speakers", type: .output)
         let service = FakeAudioService(devices: [macMini, desk])
         let manager = AudioManager(
             deviceService: service,
-            priorityManager: PriorityManager(defaults: isolatedDefaults())
+            priorityManager: PriorityManager(defaults: isolatedDefaults(keepPanelOpen: true))
         )
         // Start from neutral: the fake hands out the first device as the
         // current default, exactly as CoreAudio would.
@@ -175,7 +192,7 @@ final class AudioPriorityBarTests: XCTestCase {
         let service = FakeAudioService(devices: [macMini])
         let manager = AudioManager(
             deviceService: service,
-            priorityManager: PriorityManager(defaults: isolatedDefaults())
+            priorityManager: PriorityManager(defaults: isolatedDefaults(keepPanelOpen: true))
         )
         manager.cycleOutputPresentation(macMini, category: .speaker)
         manager.cycleOutputPresentation(macMini, category: .speaker)
@@ -206,7 +223,7 @@ final class AudioPriorityBarTests: XCTestCase {
         service.defaultOutputId = vocaster.id
         let manager = AudioManager(
             deviceService: service,
-            priorityManager: PriorityManager(defaults: isolatedDefaults())
+            priorityManager: PriorityManager(defaults: isolatedDefaults(keepPanelOpen: true))
         )
 
         XCTAssertEqual(manager.speakerDevices.filter { $0.name == "Samson Q2U Microphone" }.count, 1)
@@ -223,7 +240,7 @@ final class AudioPriorityBarTests: XCTestCase {
         let service = FakeAudioService(devices: [macMini, display], behaviors: [display.id: .ignoresWrites])
         let manager = AudioManager(
             deviceService: service,
-            priorityManager: PriorityManager(defaults: isolatedDefaults())
+            priorityManager: PriorityManager(defaults: isolatedDefaults(keepPanelOpen: true))
         )
         manager.selectOutputDevice(display, category: .speaker)
         // Without the redirect there is nothing left to do but report honestly.
@@ -431,6 +448,63 @@ final class AudioPriorityBarTests: XCTestCase {
         XCTAssertGreaterThan(manager.volume, 0.01)
     }
 
+    func testSelectingSeveralOutputsDoesNotAccumulateSelectionMutes() {
+        let fifth = AudioDevice(id: 5, uid: "fifth", name: "Fifth", type: .output)
+        let fourth = AudioDevice(id: 4, uid: "fourth", name: "Fourth", type: .output)
+        let third = AudioDevice(id: 3, uid: "third", name: "Third", type: .output)
+        let service = FakeAudioService(devices: [fifth, fourth, third])
+        let manager = AudioManager(
+            deviceService: service,
+            priorityManager: PriorityManager(defaults: isolatedDefaults())
+        )
+
+        manager.cycleOutputPresentation(fifth, category: .speaker)
+        manager.cycleOutputPresentation(fourth, category: .speaker)
+        manager.cycleOutputPresentation(third, category: .speaker)
+
+        XCTAssertFalse(manager.isDeviceMuted(fifth))
+        XCTAssertFalse(manager.isDeviceMuted(fourth))
+        XCTAssertTrue(manager.isDeviceMuted(third))
+        XCTAssertEqual(manager.currentOutputId, third.id)
+    }
+
+    func testMuteAllMicrophonesTogglesAndRestoresInputDevices() {
+        let q2u = AudioDevice(id: 5, uid: "q2u", name: "Samson Q2U", type: .input)
+        let vocaster = AudioDevice(id: 4, uid: "vocaster", name: "Vocaster Two", type: .input)
+        let service = FakeAudioService(devices: [q2u, vocaster])
+        let manager = AudioManager(
+            deviceService: service,
+            priorityManager: PriorityManager(defaults: isolatedDefaults())
+        )
+
+        manager.setAllInputsMuted(true)
+
+        XCTAssertTrue(manager.areAllInputsMuted)
+        XCTAssertFalse(service.isAudible(q2u.id, type: .input))
+        XCTAssertFalse(service.isAudible(vocaster.id, type: .input))
+
+        manager.setAllInputsMuted(false)
+
+        XCTAssertFalse(manager.areAllInputsMuted)
+        XCTAssertTrue(service.isAudible(q2u.id, type: .input))
+        XCTAssertTrue(service.isAudible(vocaster.id, type: .input))
+    }
+
+    func testMuteAllMicrophonesKeepsButtonStateWhenHardwareRefuses() {
+        let interface = AudioDevice(id: 5, uid: "interface", name: "USB Interface", type: .input)
+        let service = FakeAudioService(devices: [interface], behaviors: [interface.id: .ignoresWrites])
+        let manager = AudioManager(
+            deviceService: service,
+            priorityManager: PriorityManager(defaults: isolatedDefaults())
+        )
+
+        manager.setAllInputsMuted(true)
+
+        XCTAssertTrue(manager.areAllInputsMuted)
+        XCTAssertFalse(manager.isDeviceMuted(interface), "the UI must not claim refused hardware is muted")
+        XCTAssertTrue(manager.isDeviceUnmutable(interface))
+    }
+
     // MARK: - Mute All by moving the output
 
     func testMuteAllMovesAudioToABuiltInOutputWhenTheCurrentOneWillNotMute() {
@@ -528,10 +602,13 @@ final class AudioPriorityBarTests: XCTestCase {
         XCTAssertTrue(manager.isDeviceIgnoringMute(display))
     }
 
-    private func isolatedDefaults() -> UserDefaults {
+    private func isolatedDefaults(keepPanelOpen: Bool? = nil) -> UserDefaults {
         let suite = "AudioPriorityBarXcodeTests.Manager"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
+        if let keepPanelOpen {
+            defaults.set(keepPanelOpen, forKey: "keepApplicationInForegroundAfterSourceChange")
+        }
         return defaults
     }
 }

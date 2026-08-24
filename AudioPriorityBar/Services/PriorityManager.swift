@@ -52,6 +52,7 @@ class PriorityManager {
     private let defaultOutputCategoryKey = "defaultOutputCategory"
     private let enormousModeKey = "enormousMode"
     private let keepMutedWhenChangingSelectionKey = "keepMutedWhenChangingSelection"
+    private let keepApplicationInForegroundAfterSourceChangeKey = "keepApplicationInForegroundAfterSourceChange"
     private let redirectMuteAllToBuiltInKey = "redirectMuteAllToBuiltIn"
 
     // MARK: - Known Devices (Persistent Memory)
@@ -179,6 +180,14 @@ class PriorityManager {
     var keepMutedWhenChangingSelection: Bool {
         get { defaults.bool(forKey: keepMutedWhenChangingSelectionKey) }
         set { defaults.set(newValue, forKey: keepMutedWhenChangingSelectionKey) }
+    }
+
+    var keepApplicationInForegroundAfterSourceChange: Bool {
+        get {
+            guard defaults.object(forKey: keepApplicationInForegroundAfterSourceChangeKey) != nil else { return true }
+            return defaults.bool(forKey: keepApplicationInForegroundAfterSourceChangeKey)
+        }
+        set { defaults.set(newValue, forKey: keepApplicationInForegroundAfterSourceChangeKey) }
     }
 
     func deviceLevel(for uid: String) -> Float? {
