@@ -2,6 +2,7 @@ import SwiftUI
 import CoreAudio
 import AVFoundation
 import AppKit
+import Combine
 import Darwin
 
 /// Menu-bar apps can be launched from multiple copies on disk. Bundle IDs do
@@ -95,9 +96,155 @@ enum AppProcess {
     }
 }
 
+/// Owns the actual AppKit status item. `MenuBarExtra` is convenient for a
+/// static label, but its label is not a reliable live view for status-item
+/// tooltips or state changes.
+@MainActor
+final class StatusItemController: NSObject, ObservableObject, NSPopoverDelegate {
+    @Published var showingSettings = false
+
+    private let audioManager: AudioManager
+    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private let popover = NSPopover()
+    private var observation: AnyCancellable?
+
+    init(audioManager: AudioManager) {
+        self.audioManager = audioManager
+        super.init()
+
+        popover.behavior = .transient
+        popover.animates = true
+        popover.delegate = self
+        popover.contentViewController = NSHostingController(
+            rootView: StatusItemPanel(controller: self, audioManager: audioManager)
+        )
+
+        observation = audioManager.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.updateStatusItem()
+            }
+        }
+    }
+
+    func install() {
+        guard let button = statusItem.button else { return }
+        button.target = self
+        button.action = #selector(handleStatusItem(_:))
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        button.toolTip = "Audio Priority Bar"
+        updateStatusItem()
+    }
+
+    @objc private func handleStatusItem(_ sender: Any?) {
+        guard let event = NSApp.currentEvent else {
+            togglePopover()
+            return
+        }
+
+        if event.type == .rightMouseUp {
+            showContextMenu()
+        } else {
+            togglePopover()
+        }
+    }
+
+    private func togglePopover() {
+        guard let button = statusItem.button else { return }
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+    }
+
+    private func showContextMenu() {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Settings", action: #selector(openSettings), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Relaunch", action: #selector(relaunch), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "")
+        menu.items.forEach { $0.target = self }
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    @objc private func openSettings() {
+        showingSettings = true
+        togglePopover()
+    }
+
+    @objc private func relaunch() {
+        AppProcess.relaunch()
+    }
+
+    @objc private func quit() {
+        NSApplication.shared.terminate(nil)
+    }
+
+    private func updateStatusItem() {
+        statusItem.button?.image = statusItemImage(isMuted: audioManager.isMuteAllActive)
+        statusItem.button?.toolTip = "Audio Priority Bar"
+    }
+
+    private func statusItemImage(isMuted: Bool) -> NSImage {
+        let size = NSSize(width: 18, height: 18)
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        let speaker = NSImage(
+            systemSymbolName: "speaker.wave.2.fill",
+            accessibilityDescription: "Audio Priority Bar"
+        )
+        if let speaker {
+            let sourceSize = speaker.size
+            let scale = min(16 / max(sourceSize.width, 1), 16 / max(sourceSize.height, 1))
+            let drawSize = NSSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+            let drawRect = NSRect(
+                x: (size.width - drawSize.width) / 2,
+                y: (size.height - drawSize.height) / 2,
+                width: drawSize.width,
+                height: drawSize.height
+            )
+            speaker.draw(
+                in: drawRect,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: isMuted ? 0.45 : 1
+            )
+        }
+
+        if isMuted {
+            NSColor.white.withAlphaComponent(0.9).setStroke()
+            let strike = NSBezierPath()
+            strike.move(to: NSPoint(x: 2.5, y: 2.5))
+            strike.line(to: NSPoint(x: 15.5, y: 15.5))
+            strike.lineWidth = 2
+            strike.lineCapStyle = .round
+            strike.stroke()
+        }
+
+        image.unlockFocus()
+        image.isTemplate = true
+        return image
+    }
+}
+
+private struct StatusItemPanel: View {
+    @ObservedObject var controller: StatusItemController
+    @ObservedObject var audioManager: AudioManager
+
+    var body: some View {
+        MenuBarView(showingSettings: $controller.showingSettings)
+            .environmentObject(audioManager)
+    }
+}
+
 @main
 struct AudioPriorityBarApp: App {
     @StateObject private var audioManager: AudioManager
+    @StateObject private var statusItemController: StatusItemController
 
     init() {
         guard RunContext.isRunningTests || SingleInstanceGuard.shared.acquire() else {
@@ -105,45 +252,56 @@ struct AudioPriorityBarApp: App {
             // second app bundle cannot leave a confusing duplicate icon.
             exit(EXIT_SUCCESS)
         }
-        _audioManager = StateObject(wrappedValue: AudioManager())
+        let manager = AudioManager()
+        _audioManager = StateObject(wrappedValue: manager)
+        let controller = StatusItemController(audioManager: manager)
+        _statusItemController = StateObject(wrappedValue: controller)
+        controller.install()
     }
     
     var body: some Scene {
-        MenuBarExtra {
-            MenuBarView()
-                .environmentObject(audioManager)
-        } label: {
-            Image(systemName: "speaker.wave.2.fill")
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.window)
-
     }
 }
 
 struct MenuBarLabel: View {
-    let volume: Float
-    let isOutputMuted: Bool
-    let isInputMuted: Bool
-    let isCustomMode: Bool
-    let mode: OutputCategory
-    let micFlash: Bool
+    @ObservedObject var audioManager: AudioManager
+    let onSettings: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
-            if isInputMuted {
-                Image(systemName: micFlash ? "mic.fill" : "mic.slash.fill")
-            }
-            if isCustomMode {
-                Image(systemName: "hand.raised.fill")
-            } else if mode == .headphone {
-                Image(systemName: "headphones")
-            }
-            if isOutputMuted {
-                Image(systemName: "speaker.slash.fill")
-            } else {
-                Image(systemName: "speaker.wave.3.fill", variableValue: Double(volume))
+        ZStack {
+            Image(systemName: "speaker.wave.2.fill")
+
+            if audioManager.isMuteAllActive {
+                Image(systemName: "line.diagonal")
+                    .font(.system(size: 15, weight: .bold))
             }
         }
+        .foregroundStyle(.primary)
+        .opacity(audioManager.isMuteAllActive ? 0.45 : 1)
+        .overlay {
+            MenuBarTooltipView(text: "Audio Priority Bar")
+                .frame(width: 18, height: 18)
+        }
+    }
+}
+
+/// `MenuBarExtra` hosts its label in AppKit, where SwiftUI's `.help` modifier
+/// is not consistently bridged to the status item's tooltip. Give the label
+/// an AppKit view with an explicit tooltip instead.
+private struct MenuBarTooltipView: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.toolTip = text
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.toolTip = text
     }
 }
 
@@ -191,6 +349,9 @@ class AudioManager: ObservableObject {
     @Published var isCustomMode: Bool = false
     @Published var isActiveOutputMuted: Bool = false
     @Published var isActiveInputMuted: Bool = false
+    /// Published separately from the computed device summary so the menu-bar
+    /// label updates when the mute ledger's Mute All latch changes.
+    @Published private(set) var isMuteAllActive = false
     /// Connected outputs that were told to mute and kept playing anyway.
     /// Named in the UI so the user knows to reach for the device's own controls
     /// instead of assuming the app worked.
@@ -346,6 +507,7 @@ class AudioManager: ObservableObject {
         // it drops the mute-all latch rather than fighting it.
         if newVolume > MuteLedger.silenceThreshold {
             ledger.pinLatchAsIntents(connectedOutputsForControl.map(\.muteKey))
+            isMuteAllActive = false
             if let device = currentOutputDevice {
                 ledger.setIntent(muted: false, for: device.muteKey)
                 _ = deviceService.setDeviceMuted(false, deviceId: device.id, type: .output)
@@ -416,6 +578,7 @@ class AudioManager: ObservableObject {
     }
 
     func setAllOutputsMuted(_ muted: Bool) {
+        isMuteAllActive = muted
         if muted {
             ledger.engageAllOutputs()
             for device in connectedOutputsForControl {
@@ -464,6 +627,7 @@ class AudioManager: ObservableObject {
                 // Letting one device through is not the same as undoing Mute
                 // All, so the rest keep their mute as an explicit intent.
                 ledger.pinLatchAsIntents(connectedOutputsForControl.map(\.muteKey))
+                isMuteAllActive = false
             }
             restore(device)
         } else {
@@ -587,6 +751,10 @@ class AudioManager: ObservableObject {
         refreshVolume()
         refreshInputGain()
         refreshMuteStatus()
+        // A mute-all latch is intentionally in-memory, but the hardware can
+        // still be muted when the app is relaunched. Reconstruct the published
+        // presentation state so the menu-bar icon matches what the user sees.
+        isMuteAllActive = areAllOutputsMuted
         setupDeviceChangeListener()
         setupMuteVolumeListener()
         requestMicrophoneAccessIfNeeded()
@@ -638,6 +806,7 @@ class AudioManager: ObservableObject {
             guard ledger.externalUnmuteDetected(for: key, level: level) else { continue }
             if device.type == .output {
                 ledger.releaseAllOutputs()
+                isMuteAllActive = false
             }
             ledger.setIntent(muted: false, for: key)
         }
@@ -962,6 +1131,7 @@ class AudioManager: ObservableObject {
         currentOutputId = device.id
         if makeAudible {
             ledger.pinLatchAsIntents(connectedOutputsForControl.map(\.muteKey))
+            isMuteAllActive = false
             makeOutputAudible(device)
         } else if ledger.wantsMuted(device.muteKey) {
             // "Keep muted when switching" is on: the device the user picked

@@ -30,12 +30,14 @@ final class AudioPriorityBarTests: XCTestCase {
         manager.setAllOutputsMuted(true)
 
         XCTAssertTrue(manager.areAllOutputsMuted)
+        XCTAssertTrue(manager.isMuteAllActive)
         XCTAssertTrue(manager.isActiveOutputMuted)
         XCTAssertTrue(service.volumeWrites.contains { $0.1 == 0 })
 
         manager.setAllOutputsMuted(false)
 
         XCTAssertFalse(manager.areAllOutputsMuted)
+        XCTAssertFalse(manager.isMuteAllActive)
         XCTAssertFalse(manager.isActiveOutputMuted)
         XCTAssertTrue(service.volumeWrites.contains { $0.1 > 0.01 })
     }
@@ -49,10 +51,12 @@ final class AudioPriorityBarTests: XCTestCase {
 
         let restartedManager = AudioManager(deviceService: service, priorityManager: PriorityManager(defaults: isolatedDefaults()))
         XCTAssertTrue(restartedManager.areAllOutputsMuted)
+        XCTAssertTrue(restartedManager.isMuteAllActive)
 
         restartedManager.setAllOutputsMuted(false)
 
         XCTAssertFalse(restartedManager.areAllOutputsMuted)
+        XCTAssertFalse(restartedManager.isMuteAllActive)
         XCTAssertGreaterThan(service.outputVolume, 0)
     }
 
@@ -96,6 +100,7 @@ final class AudioPriorityBarTests: XCTestCase {
         manager.selectOutputDevice(display, category: .speaker)
         manager.setAllOutputsMuted(true)
         XCTAssertTrue(manager.areAllOutputsMuted)
+        XCTAssertTrue(manager.isMuteAllActive)
 
         manager.selectOutputDevice(macMini, category: .speaker)
 
@@ -122,6 +127,7 @@ final class AudioPriorityBarTests: XCTestCase {
         XCTAssertEqual(manager.volume, 0.53, accuracy: 0.01)
         XCTAssertEqual(service.getOutputVolume(), 0.53, accuracy: 0.01)
         XCTAssertFalse(manager.areAllOutputsMuted)
+        XCTAssertFalse(manager.isMuteAllActive)
         XCTAssertFalse(manager.isDeviceMuted(speakers))
         XCTAssertFalse(VolumeSliderView.showsMutedIcon(volume: manager.volume))
     }
@@ -405,6 +411,7 @@ final class AudioPriorityBarTests: XCTestCase {
         try await Task.sleep(nanoseconds: 100_000_000)
 
         XCTAssertFalse(manager.areAllOutputsMuted, "sound is coming out, so the app must not still say muted")
+        XCTAssertFalse(manager.isMuteAllActive)
         XCTAssertFalse(manager.isDeviceMuted(macMini))
         XCTAssertEqual(manager.volume, 0.4, accuracy: 0.01)
     }
@@ -425,6 +432,7 @@ final class AudioPriorityBarTests: XCTestCase {
         try await Task.sleep(nanoseconds: 100_000_000)
 
         XCTAssertTrue(manager.areAllOutputsMuted)
+        XCTAssertTrue(manager.isMuteAllActive)
         XCTAssertTrue(manager.isDeviceMuted(macMini), "the device that did mute stays muted")
         XCTAssertTrue(manager.isDeviceUnmutable(display), "we still know the display refused")
     }

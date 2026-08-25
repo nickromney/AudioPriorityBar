@@ -24,10 +24,16 @@ enum DeviceTab: Hashable {
     }
 }
 
+private enum AudioMuteCopy {
+    static let ignored = "Mute ignored — use physical volume controls"
+    static let ignoredLowercase = "mute ignored — use physical volume controls"
+    static let ignoredStatus = "Mute ignored"
+}
+
 struct MenuBarView: View {
     @EnvironmentObject var audioManager: AudioManager
     @State private var selectedTab: DeviceTab = .speaker
-    @State private var showingSettings = false
+    @Binding var showingSettings: Bool
 
     private let popoverWidth = PanelMetrics.width
     private let listHeight: CGFloat = 460
@@ -42,23 +48,27 @@ struct MenuBarView: View {
             // Header with mode toggle and volume
             VStack(spacing: 14) {
                 ModeToggleView(selectedTab: $selectedTab)
-                if selectedTab == .microphone && !audioManager.isCustomMode {
-                    if audioManager.currentInputSupportsSystemVolumeControl {
-                        InputGainSliderView()
+                Group {
+                    if selectedTab == .microphone && !audioManager.isCustomMode {
+                        if audioManager.currentInputSupportsSystemVolumeControl {
+                            InputGainSliderView()
+                        } else {
+                            HardwareLevelNotice(text: "Use physical volume controls")
+                        }
                     } else {
-                        HardwareLevelNotice(text: "Use this device’s hardware controls")
-                    }
-                } else {
-                    if audioManager.currentOutputSupportsSystemVolumeControl {
-                        VolumeSliderView()
-                    } else {
-                        HardwareLevelNotice(text: "Use this device’s hardware controls")
+                        if audioManager.currentOutputSupportsSystemVolumeControl {
+                            VolumeSliderView()
+                        } else if audioManager.outputsIgnoringMute.isEmpty {
+                            HardwareLevelNotice(text: "Use physical volume controls")
+                        }
                     }
                 }
+                .frame(height: 20)
             }
             .padding(.horizontal, gutter)
             .padding(.vertical, 14)
             .background(Color.primary.opacity(0.02))
+            .frame(height: 106)
 
             Divider()
                 .padding(.horizontal, gutter)
@@ -104,7 +114,7 @@ struct MenuBarView: View {
                 currentDeviceId: audioManager.currentOutputId,
                 category: .speaker,
                 showCategoryPicker: true,
-                onSelect: { audioManager.cycleOutputPresentation($0, category: .speaker, applyMode: false) },
+                onSelect: { audioManager.selectOutputDevice($0, category: .speaker, applyMode: false) },
                 onMove: audioManager.moveSpeakerDevice,
                 onHide: { audioManager.hideDevice($0, category: .speaker) }
             )
@@ -115,7 +125,7 @@ struct MenuBarView: View {
                 currentDeviceId: audioManager.currentOutputId,
                 category: .headphone,
                 showCategoryPicker: true,
-                onSelect: { audioManager.cycleOutputPresentation($0, category: .headphone, applyMode: false) },
+                onSelect: { audioManager.selectOutputDevice($0, category: .headphone, applyMode: false) },
                 onMove: audioManager.moveHeadphoneDevice,
                 onHide: { audioManager.hideDevice($0, category: .headphone) }
             )
@@ -140,7 +150,7 @@ struct MenuBarView: View {
                     if selectedTab == .microphone {
                         audioManager.setInputDevice(device)
                     } else {
-                        audioManager.cycleOutputPresentation(device, category: selectedTab == .speaker ? .speaker : .headphone)
+                        audioManager.selectOutputDevice(device, category: selectedTab == .speaker ? .speaker : .headphone)
                     }
                 },
                 onMove: selectedTab == .speaker ? audioManager.moveSpeakerDevice :
@@ -302,26 +312,37 @@ struct DeviceCardList: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                if let status = statusText(isSelected: isSelected, isMuted: isMuted, isIgnoringMute: isIgnoringMute) {
-                    Text(status)
-                        .font(PanelType.status)
-                        .lineLimit(1)
-                        .foregroundStyle(statusTint(isSelected: isSelected, isIgnoringMute: isIgnoringMute))
-                }
+                // Keep the subtitle's line allocated even when there is no
+                // status. Mute changes must not change a card's height and
+                // reflow the entire menu-bar panel.
+                let status = statusText(isSelected: isSelected, isMuted: isMuted, isIgnoringMute: isIgnoringMute)
+                Text(status ?? " ")
+                    .font(PanelType.status)
+                    .lineLimit(1)
+                    .foregroundStyle(statusTint(isSelected: isSelected, isIgnoringMute: isIgnoringMute))
+                    .frame(height: 14, alignment: .leading)
+                    .opacity(status == nil ? 0 : 1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 16))
-            }
+            // Reserve the checkmark slot for every row so changing the
+            // current device never moves the mute button horizontally.
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 16))
+                .frame(width: 18, height: 18)
+                .opacity(isSelected ? 1 : 0)
 
             muteButton(for: device, isMuted: isMuted, isIgnoringMute: isIgnoringMute, isSelected: isSelected)
         }
         .foregroundColor(isSelected ? .white : .primary)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, minHeight: PanelMetrics.cardMinHeight, alignment: .leading)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: PanelMetrics.cardMinHeight,
+            maxHeight: PanelMetrics.cardMinHeight,
+            alignment: .leading
+        )
         .background(
             RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
                 .fill(isSelected ? Color.accentColor : Color.primary.opacity(0.06))
@@ -361,9 +382,9 @@ struct DeviceCardList: View {
     }
 
     private func cardHelp(isSelected: Bool, isMuted: Bool) -> String {
-        if !isSelected { return "Click to make this the output, silent at first." }
-        if isMuted { return "Click to unmute. Click again to hand over to the next device." }
-        return "Click to hand over to the next device. The speaker icon mutes this one."
+        if !isSelected { return "Click to use this output" }
+        if isMuted { return "Current output — use the speaker button to unmute" }
+        return "Current output — use the speaker button to mute"
     }
 
     /// Muting a device is its own control so it never has to fight with
@@ -401,14 +422,14 @@ struct DeviceCardList: View {
     }
 
     private func muteHelp(isMuted: Bool, isIgnoringMute: Bool) -> String {
-        if isIgnoringMute { return "This device ignored the mute. Use its own volume control." }
+        if isIgnoringMute { return AudioMuteCopy.ignored }
         return isMuted ? "Unmute this device" : "Mute this device"
     }
 
     private func statusText(isSelected: Bool, isMuted: Bool, isIgnoringMute: Bool) -> String? {
-        if isIgnoringMute { return "Still playing — use its own controls" }
+        if isIgnoringMute { return AudioMuteCopy.ignoredStatus }
         if isMuted { return "Muted" }
-        if isSelected { return "Listening" }
+        if isSelected { return "Current" }
         return nil
     }
 
@@ -554,7 +575,7 @@ struct OutputMuteStatusView: View {
         let ignoring = audioManager.outputsIgnoringMute
         if !ignoring.isEmpty {
             let names = ignoring.joined(separator: ", ")
-            return "\(names) ignored the mute — use its own volume control"
+            return "\(names): \(AudioMuteCopy.ignoredLowercase)"
         }
         return audioManager.areAllOutputsMuted ? "Output is muted" : "Output is live"
     }
@@ -566,12 +587,25 @@ struct SettingsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Text("Settings")
-                .font(.system(size: 22, weight: .semibold))
+            HStack(spacing: 10) {
+                Image(systemName: "gearshape.fill")
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                    .frame(width: 28, height: 28)
+                    .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Settings")
+                        .font(.title3.weight(.semibold))
+                    Text("Audio Priority Bar")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Open to")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Picker("Open to", selection: Binding(
                     get: { audioManager.defaultOutputCategory },
@@ -622,6 +656,7 @@ struct SettingsPanel: View {
             Spacer(minLength: 0)
         }
         .padding(24)
+        .tint(.accentColor)
         .frame(maxHeight: .infinity, alignment: .top)
     }
 }
@@ -635,9 +670,9 @@ private struct SettingsToggleRow: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.body.weight(.medium))
                 Text(subtitle)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

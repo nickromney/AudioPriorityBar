@@ -221,12 +221,11 @@ struct DraggableDeviceRow: View {
 
                 Spacer(minLength: 12)
 
-                if isSelected && !isDisconnected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.accentColor)
-                        .font(.system(size: 15))
-                        .transition(.scale.combined(with: .opacity))
-                }
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.accentColor)
+                    .font(.system(size: 15))
+                    .frame(width: 18, height: 18)
+                    .opacity(isSelected && !isDisconnected ? 1 : 0)
             }
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isSelected)
 

@@ -36,12 +36,23 @@ A native macOS menu bar app that automatically manages audio device priorities. 
    cd AudioPriorityBar
    ```
 
-2. Build using the build script:
+2. Build a local release artifact:
    ```bash
-   ./build.sh
+   make dist
    ```
 
 3. The app will be at `dist/AudioPriorityBar.app`
+
+For normal local development, use `make dev`. It builds the current Debug
+version, replaces `~/Applications/AudioPriorityBar.app`, and launches that
+copy so Relaunch and subsequent edits use the binary you just built.
+
+Other useful commands:
+
+- `make build` — build Debug without installing it
+- `make run` — alias for `make dev`
+- `make install` — install the current Release artifact into `~/Applications`
+- `make clean` — remove local build and distribution artifacts
 
 Or open `AudioPriorityBar.xcodeproj` in Xcode and build with ⌘R.
 
