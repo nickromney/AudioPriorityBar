@@ -2,69 +2,44 @@ import Foundation
 import ServiceManagement
 
 @MainActor
-class LaunchAtLoginManager: ObservableObject {
+final class LaunchAtLoginManager: ObservableObject {
     static let shared = LaunchAtLoginManager()
 
-    /// A checkout/build artifact must not register itself as a second login
-    /// item alongside the installed app in ~/Applications or /Applications.
     var canManageLaunchAtLogin: Bool {
         Bundle.main.bundleURL.pathComponents.contains("Applications")
     }
-    
-    @Published var isEnabled: Bool {
-        didSet {
-            if isEnabled {
-                enableLaunchAtLogin()
-            } else {
-                disableLaunchAtLogin()
-            }
-        }
-    }
-    
+
+    @Published private(set) var isEnabled = false
+    @Published private(set) var requiresApproval = false
+    @Published private(set) var errorMessage: String?
+
     private init() {
-        // Check current status
-        let isInstalledCopy = Bundle.main.bundleURL.pathComponents.contains("Applications")
-        if isInstalledCopy, #available(macOS 13.0, *) {
-            isEnabled = SMAppService.mainApp.status == .enabled
-        } else {
-            isEnabled = false
-        }
+        refresh()
     }
-    
-    private func enableLaunchAtLogin() {
+
+    func setEnabled(_ enabled: Bool) {
         guard canManageLaunchAtLogin else { return }
-        if #available(macOS 13.0, *) {
-            do {
+        errorMessage = nil
+        do {
+            if enabled {
                 try SMAppService.mainApp.register()
-            } catch {
-                print("Failed to enable launch at login: \(error)")
-                // Revert the toggle if registration fails
-                DispatchQueue.main.async {
-                    self.isEnabled = false
-                }
-            }
-        }
-    }
-    
-    private func disableLaunchAtLogin() {
-        guard canManageLaunchAtLogin else { return }
-        if #available(macOS 13.0, *) {
-            do {
+            } else {
                 try SMAppService.mainApp.unregister()
-            } catch {
-                print("Failed to disable launch at login: \(error)")
             }
+        } catch {
+            errorMessage = "Could not change Open at Login. \(error.localizedDescription)"
         }
+        refresh()
     }
-    
+
     func refresh() {
         guard canManageLaunchAtLogin else { return }
-        if #available(macOS 13.0, *) {
-            let newStatus = SMAppService.mainApp.status == .enabled
-            if newStatus != isEnabled {
-                // Update without triggering didSet
-                _isEnabled = Published(wrappedValue: newStatus)
-            }
-        }
+        let status = SMAppService.mainApp.status
+        requiresApproval = status == .requiresApproval
+        isEnabled = status == .enabled || requiresApproval
+    }
+
+    func openLoginItemsSettings() {
+        SMAppService.openSystemSettingsLoginItems()
     }
 }

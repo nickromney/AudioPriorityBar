@@ -41,8 +41,8 @@ build:
 		-configuration Debug \
 		-derivedDataPath "$(BUILD_DIR)" \
 		CODE_SIGN_IDENTITY="-" \
-		CODE_SIGNING_REQUIRED=NO \
-		CODE_SIGNING_ALLOWED=NO \
+		CODE_SIGNING_REQUIRED=YES \
+		CODE_SIGNING_ALLOWED=YES \
 		build
 
 dist:
@@ -54,8 +54,8 @@ dist:
 		-arch arm64 -arch x86_64 \
 		ONLY_ACTIVE_ARCH=NO \
 		CODE_SIGN_IDENTITY="-" \
-		CODE_SIGNING_REQUIRED=NO \
-		CODE_SIGNING_ALLOWED=NO \
+		CODE_SIGNING_REQUIRED=YES \
+		CODE_SIGNING_ALLOWED=YES \
 		build
 	@mkdir -p "$(DIST_DIR)"
 	@rm -rf "$(DIST_APP)"
@@ -71,9 +71,17 @@ install: dist
 dev: build
 	@mkdir -p "$(HOME)/Applications"
 	@pkill -x "$(APP_NAME)" >/dev/null 2>&1 || true
+	@for attempt in {1..100}; do \
+		if ! pgrep -x "$(APP_NAME)" >/dev/null; then break; fi; \
+		sleep 0.1; \
+	done; \
+	if pgrep -x "$(APP_NAME)" >/dev/null; then \
+		echo "Audio Priority Bar did not quit. Quit it and run make dev again." >&2; \
+		exit 1; \
+	fi
 	@rm -rf "$(INSTALLED_APP)"
 	@ditto "$(DEV_APP)" "$(INSTALLED_APP)"
-	@open "$(INSTALLED_APP)"
+	@open -n "$(INSTALLED_APP)"
 	@echo "Running $(INSTALLED_APP)"
 
 run: dev

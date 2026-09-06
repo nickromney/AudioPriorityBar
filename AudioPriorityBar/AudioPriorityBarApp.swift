@@ -54,11 +54,22 @@ enum RunContext {
 }
 
 enum AppProcess {
-    static func relaunchConfiguration() -> NSWorkspace.OpenConfiguration {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        configuration.createsNewApplicationInstance = true
-        return configuration
+    static func relaunchArguments() -> [String] {
+        ["--relaunch-after", String(ProcessInfo.processInfo.processIdentifier)]
+    }
+
+    static func waitForPreviousInstance(arguments: [String] = CommandLine.arguments) -> Bool {
+        guard let flag = arguments.firstIndex(of: "--relaunch-after"),
+              arguments.indices.contains(flag + 1),
+              let pid = Int32(arguments[flag + 1]), pid > 0,
+              pid != ProcessInfo.processInfo.processIdentifier else { return true }
+        // Finish removing the old status item before creating the replacement.
+        // Otherwise menu-bar managers can briefly see two items with one identity.
+        for _ in 0..<100 {
+            if kill(pid, 0) != 0 && errno == ESRCH { return true }
+            usleep(100_000)
+        }
+        return false
     }
 
     static func relaunch() {
@@ -67,31 +78,21 @@ enum AppProcess {
             .appendingPathComponent("Contents")
             .appendingPathComponent("MacOS")
             .appendingPathComponent("AudioPriorityBar")
-        SingleInstanceGuard.shared.release()
-
-        // LaunchServices can resolve an already-running LSUIElement app back
-        // to the existing process, even with createsNewApplicationInstance.
-        // Starting the installed executable directly makes Relaunch reliable
-        // for both the LaunchAgent copy and a manually opened app bundle.
+        // LaunchServices may resolve this request to the running LSUIElement
+        // process. Launch the same executable with an explicit handoff instead.
         do {
             let process = Process()
             process.executableURL = executableURL
+            process.arguments = relaunchArguments()
             process.currentDirectoryURL = bundleURL
             try process.run()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                NSApplication.shared.terminate(nil)
-            }
+            NSApplication.shared.terminate(nil)
         } catch {
-            // Keep LaunchServices as a fallback for unusual bundle layouts.
-            NSWorkspace.shared.openApplication(at: bundleURL, configuration: relaunchConfiguration()) { application, error in
-                guard application != nil, error == nil else {
-                    print("AudioPriorityBar relaunch failed: \(error?.localizedDescription ?? "unknown error")")
-                    return
-                }
-                DispatchQueue.main.async {
-                    NSApplication.shared.terminate(nil)
-                }
-            }
+            let alert = NSAlert()
+            alert.messageText = "Could not relaunch Audio Priority Bar"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
         }
     }
 }
@@ -105,12 +106,17 @@ final class StatusItemController: NSObject, ObservableObject, NSPopoverDelegate 
 
     private let audioManager: AudioManager
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private static let normalImage = makeStatusItemImage(symbol: "speaker.wave.2.fill")
+    private static let mutedImage = makeStatusItemImage(symbol: "speaker.slash.fill")
     private let popover = NSPopover()
     private var observation: AnyCancellable?
 
     init(audioManager: AudioManager) {
         self.audioManager = audioManager
         super.init()
+
+        // Keep this name stable across versions and audio state changes.
+        statusItem.autosaveName = "AudioPriorityBar.main"
 
         popover.behavior = .transient
         popover.animates = true
@@ -119,11 +125,11 @@ final class StatusItemController: NSObject, ObservableObject, NSPopoverDelegate 
             rootView: StatusItemPanel(controller: self, audioManager: audioManager)
         )
 
-        observation = audioManager.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.updateStatusItem()
+        observation = audioManager.$isMuteAllActive
+            .removeDuplicates()
+            .sink { [weak self] isMuted in
+                self?.updateStatusItem(isMuted: isMuted)
             }
-        }
     }
 
     func install() {
@@ -132,7 +138,11 @@ final class StatusItemController: NSObject, ObservableObject, NSPopoverDelegate 
         button.action = #selector(handleStatusItem(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         button.toolTip = "Audio Priority Bar"
-        updateStatusItem()
+        button.identifier = NSUserInterfaceItemIdentifier("AudioPriorityBar.statusItem")
+        button.setAccessibilityIdentifier("AudioPriorityBar.statusItem")
+        button.setAccessibilityLabel("Audio Priority Bar")
+        button.imagePosition = .imageOnly
+        updateStatusItem(isMuted: audioManager.isMuteAllActive)
     }
 
     @objc private func handleStatusItem(_ sender: Any?) {
@@ -149,21 +159,33 @@ final class StatusItemController: NSObject, ObservableObject, NSPopoverDelegate 
     }
 
     private func togglePopover() {
-        guard let button = statusItem.button else { return }
         if popover.isShown {
             popover.performClose(nil)
         } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            showPopover()
         }
     }
 
+    private func showPopover() {
+        guard !popover.isShown, let button = statusItem.button else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+        button.highlight(true)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        statusItem.button?.highlight(false)
+    }
+
     private func showContextMenu() {
+        popover.performClose(nil)
         let menu = NSMenu()
-        menu.addItem(withTitle: "Settings", action: #selector(openSettings), keyEquivalent: "")
+        menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Relaunch", action: #selector(relaunch), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "")
+        menu.addItem(withTitle: "Quit Audio Priority Bar", action: #selector(quit), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
@@ -172,7 +194,10 @@ final class StatusItemController: NSObject, ObservableObject, NSPopoverDelegate 
 
     @objc private func openSettings() {
         showingSettings = true
-        togglePopover()
+        // Let menu tracking finish before presenting the panel.
+        DispatchQueue.main.async { [weak self] in
+            self?.showPopover()
+        }
     }
 
     @objc private func relaunch() {
@@ -183,50 +208,15 @@ final class StatusItemController: NSObject, ObservableObject, NSPopoverDelegate 
         NSApplication.shared.terminate(nil)
     }
 
-    private func updateStatusItem() {
-        statusItem.button?.image = statusItemImage(isMuted: audioManager.isMuteAllActive)
-        statusItem.button?.toolTip = "Audio Priority Bar"
+    private func updateStatusItem(isMuted: Bool) {
+        statusItem.button?.image = isMuted ? Self.mutedImage : Self.normalImage
+        statusItem.button?.setAccessibilityValue(isMuted ? "All outputs muted" : "Audio controls")
     }
 
-    private func statusItemImage(isMuted: Bool) -> NSImage {
-        let size = NSSize(width: 18, height: 18)
-        let image = NSImage(size: size)
-        image.lockFocus()
-
-        let speaker = NSImage(
-            systemSymbolName: "speaker.wave.2.fill",
-            accessibilityDescription: "Audio Priority Bar"
-        )
-        if let speaker {
-            let sourceSize = speaker.size
-            let scale = min(16 / max(sourceSize.width, 1), 16 / max(sourceSize.height, 1))
-            let drawSize = NSSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
-            let drawRect = NSRect(
-                x: (size.width - drawSize.width) / 2,
-                y: (size.height - drawSize.height) / 2,
-                width: drawSize.width,
-                height: drawSize.height
-            )
-            speaker.draw(
-                in: drawRect,
-                from: .zero,
-                operation: .sourceOver,
-                fraction: isMuted ? 0.45 : 1
-            )
-        }
-
-        if isMuted {
-            NSColor.white.withAlphaComponent(0.9).setStroke()
-            let strike = NSBezierPath()
-            strike.move(to: NSPoint(x: 2.5, y: 2.5))
-            strike.line(to: NSPoint(x: 15.5, y: 15.5))
-            strike.lineWidth = 2
-            strike.lineCapStyle = .round
-            strike.stroke()
-        }
-
-        image.unlockFocus()
-        image.isTemplate = true
+    private static func makeStatusItemImage(symbol: String) -> NSImage? {
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 16, weight: .regular))
+        image?.isTemplate = true
         return image
     }
 }
@@ -247,10 +237,14 @@ struct AudioPriorityBarApp: App {
     @StateObject private var statusItemController: StatusItemController
 
     init() {
-        guard RunContext.isRunningTests || SingleInstanceGuard.shared.acquire() else {
+        guard RunContext.isRunningTests || (AppProcess.waitForPreviousInstance() && SingleInstanceGuard.shared.acquire()) else {
             // Another copy already owns the menu-bar slot. Exit quietly so a
             // second app bundle cannot leave a confusing duplicate icon.
             exit(EXIT_SUCCESS)
+        }
+        if !RunContext.isRunningTests,
+           let legacy = UserDefaults.standard.persistentDomain(forName: "com.example.AudioPriorityBarTestsHost") {
+            PriorityManager().importLegacyDebugPreferences(legacy)
         }
         let manager = AudioManager()
         _audioManager = StateObject(wrappedValue: manager)
@@ -263,45 +257,6 @@ struct AudioPriorityBarApp: App {
         Settings {
             EmptyView()
         }
-    }
-}
-
-struct MenuBarLabel: View {
-    @ObservedObject var audioManager: AudioManager
-    let onSettings: () -> Void
-
-    var body: some View {
-        ZStack {
-            Image(systemName: "speaker.wave.2.fill")
-
-            if audioManager.isMuteAllActive {
-                Image(systemName: "line.diagonal")
-                    .font(.system(size: 15, weight: .bold))
-            }
-        }
-        .foregroundStyle(.primary)
-        .opacity(audioManager.isMuteAllActive ? 0.45 : 1)
-        .overlay {
-            MenuBarTooltipView(text: "Audio Priority Bar")
-                .frame(width: 18, height: 18)
-        }
-    }
-}
-
-/// `MenuBarExtra` hosts its label in AppKit, where SwiftUI's `.help` modifier
-/// is not consistently bridged to the status item's tooltip. Give the label
-/// an AppKit view with an explicit tooltip instead.
-private struct MenuBarTooltipView: NSViewRepresentable {
-    let text: String
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.toolTip = text
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        nsView.toolTip = text
     }
 }
 
@@ -386,6 +341,28 @@ class AudioManager: ObservableObject {
     var defaultOutputCategory: OutputCategory {
         get { priorityManager.defaultOutputCategory }
         set { priorityManager.defaultOutputCategory = newValue }
+    }
+
+    var visibleDeviceTabs: [DeviceTab] { priorityManager.visibleDeviceTabs }
+
+    var defaultDeviceTab: DeviceTab {
+        get { priorityManager.defaultDeviceTab }
+        set {
+            objectWillChange.send()
+            priorityManager.defaultDeviceTab = newValue
+        }
+    }
+
+    func setDeviceTab(_ tab: DeviceTab, visible: Bool) {
+        var tabs = visibleDeviceTabs
+        if visible {
+            if !tabs.contains(tab) { tabs.append(tab) }
+        } else {
+            guard tabs.count > 1 else { return }
+            tabs.removeAll { $0 == tab }
+        }
+        objectWillChange.send()
+        priorityManager.visibleDeviceTabs = tabs
     }
 
     var currentOutputSupportsSystemVolumeControl: Bool {

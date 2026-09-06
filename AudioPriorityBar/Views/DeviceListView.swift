@@ -181,28 +181,28 @@ struct DraggableDeviceRow: View {
                 )
             }
 
-            // Device name - use HStack with tap gesture instead of Button to not interfere with drag
-            HStack(spacing: 8) {
-                Text(device.name)
-                    .font(.system(size: 13, weight: .regular))
-                    .strikethrough(isNeverUse, color: .secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .foregroundColor(isGrayed || isNeverUse ? .secondary : .primary)
+            Button(action: onSelect) {
+                HStack(spacing: 8) {
+                    Text(device.name)
+                        .font(.system(size: 13, weight: .regular))
+                        .strikethrough(isNeverUse, color: .secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundColor(isGrayed || isNeverUse ? .secondary : .primary)
 
-                if let icon = statusIcon {
-                    Image(systemName: icon)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary.opacity(0.7))
-                }
+                    if let icon = statusIcon {
+                        Image(systemName: icon)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
 
-                if let lastSeen = lastSeenText {
-                    Text(lastSeen)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary.opacity(0.6))
-                }
+                    if let lastSeen = lastSeenText {
+                        Text(lastSeen)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary.opacity(0.6))
+                    }
 
-                if isMuted {
+                    if isMuted {
                         HStack(spacing: 4) {
                             Image(systemName: "speaker.slash.fill")
                                 .font(.system(size: 9))
@@ -217,50 +217,43 @@ struct DraggableDeviceRow: View {
                                 .fill(Color(NSColor.windowBackgroundColor))
                                 .overlay(Capsule().stroke(Color.secondary.opacity(0.3), lineWidth: 1))
                         )
-                }
-
-                Spacer(minLength: 12)
-
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.accentColor)
-                    .font(.system(size: 15))
-                    .frame(width: 18, height: 18)
-                    .opacity(isSelected && !isDisconnected ? 1 : 0)
-            }
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isSelected)
-
-            // Actions menu - always reserve space to prevent layout shifts
-            ZStack {
-                // Invisible placeholder to reserve space
-                Image(systemName: "ellipsis.circle")
-                    .font(.system(size: 14))
-                    .frame(width: 28, height: 28)
-                    .opacity(0)
-                
-                // Actual menu (shown on hover)
-                if isHovering {
-                    Menu {
-                        DeviceContextMenu(
-                            device: device,
-                            category: category,
-                            showCategoryPicker: showCategoryPicker,
-                            onHide: onHide,
-                            onUnhide: onUnhide,
-                            isHiddenSection: isHiddenSection
-                        )
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.system(size: 14))
-                            .foregroundColor(.secondary)
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
                     }
-                    .menuStyle(.borderlessButton)
-                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+
+                    Spacer(minLength: 12)
+
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.accentColor)
+                        .font(.system(size: 15))
+                        .frame(width: 18, height: 18)
+                        .opacity(isSelected && !isDisconnected ? 1 : 0)
                 }
+                .contentShape(Rectangle())
             }
-            .frame(width: 32)
-            .animation(.easeInOut(duration: 0.12), value: isHovering)
+            .buttonStyle(.plain)
+            .disabled(isDisconnected)
+            .accessibilityLabel(device.name)
+            .accessibilityValue(isDisconnected ? "Disconnected" : (isSelected ? "Selected" : "Not selected"))
+            .help(device.name)
+
+            Menu {
+                DeviceContextMenu(
+                    device: device,
+                    category: category,
+                    showCategoryPicker: showCategoryPicker,
+                    onHide: onHide,
+                    onUnhide: onUnhide,
+                    isHiddenSection: isHiddenSection
+                )
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .foregroundColor(.secondary)
+                    .frame(width: 28, height: 28)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel("Options for \(device.name)")
+            .help("Device options")
         }
         .padding(.leading, 8)
         .padding(.trailing, 10)
@@ -288,11 +281,6 @@ struct DraggableDeviceRow: View {
         .animation(.easeInOut(duration: 0.15), value: isHovering)
         .animation(.easeInOut(duration: 0.15), value: isSelected)
         .contentShape(Rectangle())
-        .onTapGesture {
-            if !isDisconnected {
-                onSelect()
-            }
-        }
         .dropDestination(for: String.self) { items, _ in
             guard let uid = items.first else { return false }
             return onDropUID(uid)
