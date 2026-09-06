@@ -12,6 +12,55 @@ final class PriorityManagerTests: XCTestCase {
         manager = PriorityManager(defaults: defaults)
     }
 
+    func testLegacyDebugImportPreservesExistingPreferencesAndSkipsStatusItemState() {
+        manager.defaultOutputCategory = .headphone
+        manager.importLegacyDebugPreferences([
+            "defaultOutputCategory": "speaker",
+            "speakerPriorities": ["desk", "display"],
+            "NSStatusItem Preferred Position AudioPriorityBar.main": 120,
+            "NSStatusItem Visible AudioPriorityBar.main": false
+        ])
+        XCTAssertEqual(manager.defaultOutputCategory, .headphone)
+        XCTAssertEqual(defaults.stringArray(forKey: "speakerPriorities"), ["desk", "display"])
+        XCTAssertNil(defaults.object(forKey: "NSStatusItem Preferred Position AudioPriorityBar.main"))
+        XCTAssertNil(defaults.object(forKey: "NSStatusItem Visible AudioPriorityBar.main"))
+
+        defaults.removeObject(forKey: "speakerPriorities")
+        manager.importLegacyDebugPreferences(["speakerPriorities": ["old"]])
+        XCTAssertNil(defaults.object(forKey: "speakerPriorities"))
+    }
+
+    func testPanelSectionsDefaultToAllAndPersistInDisplayOrder() {
+        XCTAssertEqual(manager.visibleDeviceTabs, DeviceTab.allCases)
+        manager.visibleDeviceTabs = [.microphone, .speaker, .speaker]
+        XCTAssertEqual(PriorityManager(defaults: defaults).visibleDeviceTabs, [.speaker, .microphone])
+    }
+
+    func testPanelCannotHideEverySection() {
+        manager.visibleDeviceTabs = [.microphone]
+        manager.visibleDeviceTabs = []
+        XCTAssertEqual(manager.visibleDeviceTabs, [.microphone])
+        XCTAssertEqual(manager.defaultDeviceTab, .microphone)
+    }
+
+    func testHiddenDefaultFallsBackWithoutLosingPreferredTab() {
+        manager.defaultOutputCategory = .headphone
+        XCTAssertEqual(manager.defaultDeviceTab, .headphone)
+        manager.defaultDeviceTab = .microphone
+        manager.visibleDeviceTabs = [.speaker]
+        XCTAssertEqual(manager.defaultDeviceTab, .speaker)
+        manager.defaultDeviceTab = .headphone
+        manager.visibleDeviceTabs = [.speaker, .microphone]
+        XCTAssertEqual(manager.defaultDeviceTab, .microphone)
+    }
+
+    func testInvalidStoredSectionsRecoverToAUsablePanel() {
+        defaults.set(["unknown"], forKey: "visibleDeviceTabs")
+        XCTAssertEqual(manager.visibleDeviceTabs, DeviceTab.allCases)
+        defaults.set([], forKey: "visibleDeviceTabs")
+        XCTAssertFalse(manager.visibleDeviceTabs.isEmpty)
+    }
+
     func testNeverUseRoundTripsByUID() {
         let device = AudioDevice(id: 1, uid: "speaker-1", name: "Desk", type: .output)
 

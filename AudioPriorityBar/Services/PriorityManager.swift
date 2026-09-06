@@ -38,6 +38,26 @@ class PriorityManager {
         self.defaults = defaults
     }
 
+    /// Import missing app preferences from builds that used the test-host ID.
+    /// AppKit's saved positions and visibility must stay in their own domain.
+    func importLegacyDebugPreferences(_ legacy: [String: Any]) {
+        let marker = "didImportLegacyDebugPreferences"
+        guard !defaults.bool(forKey: marker) else { return }
+        let keys = [
+            inputPrioritiesKey, speakerPrioritiesKey, headphonePrioritiesKey,
+            deviceCategoriesKey, currentModeKey, customModeKey, hiddenDevicesKey,
+            knownDevicesKey, deviceLevelsKey, deviceLevelsEnabledKey,
+            volumeControlPreferencesKey, defaultOutputCategoryKey, enormousModeKey,
+            keepMutedWhenChangingSelectionKey,
+            keepApplicationInForegroundAfterSourceChangeKey, redirectMuteAllToBuiltInKey,
+            hiddenMicsKey, hiddenSpeakersKey, hiddenHeadphonesKey, neverUseKey
+        ]
+        for key in keys where defaults.object(forKey: key) == nil {
+            if let value = legacy[key] { defaults.set(value, forKey: key) }
+        }
+        defaults.set(true, forKey: marker)
+    }
+
     private let inputPrioritiesKey = "inputPriorities"
     private let speakerPrioritiesKey = "speakerPriorities"
     private let headphonePrioritiesKey = "headphonePriorities"
@@ -144,6 +164,33 @@ class PriorityManager {
             return category
         }
         set { defaults.set(newValue.rawValue, forKey: defaultOutputCategoryKey) }
+    }
+
+    var visibleDeviceTabs: [DeviceTab] {
+        get {
+            guard let stored = defaults.stringArray(forKey: "visibleDeviceTabs") else {
+                return DeviceTab.allCases
+            }
+            let tabs = DeviceTab.allCases.filter { stored.contains($0.rawValue) }
+            return tabs.isEmpty ? DeviceTab.allCases : tabs
+        }
+        set {
+            let tabs = DeviceTab.allCases.filter { newValue.contains($0) }
+            guard !tabs.isEmpty else { return }
+            defaults.set(tabs.map(\.rawValue), forKey: "visibleDeviceTabs")
+        }
+    }
+
+    var defaultDeviceTab: DeviceTab {
+        get {
+            let preferred = defaults.string(forKey: "defaultDeviceTab").flatMap(DeviceTab.init(rawValue:))
+                ?? (defaultOutputCategory == .headphone ? .headphone : .speaker)
+            return visibleDeviceTabs.contains(preferred) ? preferred : visibleDeviceTabs[0]
+        }
+        set {
+            guard visibleDeviceTabs.contains(newValue) else { return }
+            defaults.set(newValue.rawValue, forKey: "defaultDeviceTab")
+        }
     }
 
     var isEnormousMode: Bool {

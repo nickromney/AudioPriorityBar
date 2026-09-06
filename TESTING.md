@@ -51,3 +51,28 @@ pkill -x AudioPriorityBar
 
 `SingleInstanceGuard` is also skipped under XCTest (see `RunContext`), so the
 host app no longer exits on its own lock during a test run.
+
+## Menu bar and native UI checks
+
+The hosted tests cover the relaunch process handoff and panel bounds in light
+and dark appearances. They render controls and Settings with fake devices to
+`/tmp/AudioPriorityBar-{controls,settings}-NSAppearanceName{Aqua,DarkAqua}.png`.
+These are offscreen renders, not a verification of live popover interaction.
+
+For the live Bartender check:
+
+1. Install with `make dev`. Both Debug and Release must report
+   `com.example.AudioPriorityBar` as their bundle identifier.
+2. If upgrading from the old Debug test-host identity, put the new item in
+   Bartender's Shown section once.
+3. Mute and unmute, change devices, close and reopen the panel, and use
+   Relaunch. Verify the item stays in its assigned section and only one item
+   exists throughout the relaunch.
+4. Repeat after quitting and launching the app and after a display change.
+5. Check Command-comma, Tab/Space navigation with macOS Keyboard Navigation
+   enabled, device options in Edit mode, and right-click Settings while the
+   panel is open. Check VoiceOver names for selection, mute, and sliders.
+
+The preference import deliberately excludes AppKit position and visibility
+keys. Tests use isolated defaults and do not migrate the installed copy's
+preferences.

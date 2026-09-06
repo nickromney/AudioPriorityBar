@@ -21,7 +21,7 @@ A native macOS menu bar app that automatically manages audio device priorities. 
 - **Per-category ignore**: Hide devices from specific categories without affecting others.
 - **Drag-to-reorder**: Reorder devices by dragging or using up/down arrows.
 - **Volume control**: Adjust volume with slider or scroll wheel.
-- **Menu bar integration**: Shows current mode icon and volume percentage.
+- **Menu bar integration**: A fixed-width status item with a stable identity and a slashed speaker when all outputs are muted.
 
 ## Installation
 
@@ -45,7 +45,9 @@ A native macOS menu bar app that automatically manages audio device priorities. 
 
 For normal local development, use `make dev`. It builds the current Debug
 version, replaces `~/Applications/AudioPriorityBar.app`, and launches that
-copy so Relaunch and subsequent edits use the binary you just built.
+copy so Relaunch and subsequent edits use the binary you just built. The command
+waits for the old process to exit before replacing the bundle and requests a
+fresh launch. Local builds are ad-hoc signed; no developer certificate is needed.
 
 Other useful commands:
 
@@ -69,13 +71,26 @@ Check the [Releases](https://github.com/nickromney/AudioPriorityBar/releases) pa
 | **Headphones** | 🎧 | Shows headphone devices, auto-switches to highest priority |
 | **Custom** | ✋ | Shows all devices, no auto-switching |
 
+### Visible sections
+
+In Settings, use **Show in panel** to show Speakers, Headphones, Microphones,
+or any combination. At least one section must remain visible. **Open to**
+lists only visible sections and also supports Microphones.
+
+These choices apply to the tabs, Manual and Edit views, and mute controls.
+They do not change audio routing, priorities, or device categories. An interface
+such as Vocaster can remain under Speakers even when you listen through its
+headphone jack. The panel height stays fixed when switching visible tabs.
+
 ### Managing Priorities
 
 - **Click a device**: Moves it to #1 priority (in normal mode) or just selects it (in custom mode)
 - **Drag devices**: Reorder by dragging the handle
 - **Up/Down arrows**: Fine-tune order on hover
 
-### Device Actions (hover menu)
+### Device Actions
+
+Right-click a device, or use its visible options menu in Edit mode.
 
 - **Move to Speakers/Headphones**: Change device category
 - **Ignore as [category]**: Hide from current category only
@@ -90,6 +105,21 @@ Click "Edit" in the footer to:
 - View "last seen" timestamps
 - Forget old devices you no longer use
 
+### Menu bar placement and Bartender
+
+Debug and Release builds use the same bundle identifier. The status item has
+one stable autosave name and accessibility identifier, and Relaunch waits for
+the previous process to exit before creating its replacement.
+
+Older Debug builds installed by `make dev` used a different identifier,
+`com.example.AudioPriorityBarTestsHost`. After updating from one of those
+builds, you may need to place Audio Priority Bar in Bartender's Shown section
+once. Missing audio preferences are imported from that old identity; existing
+preferences and Bartender's settings are preserved.
+
+Click Settings or press Command-comma while the controls are open. Relaunch
+and Quit are in the status item's right-click menu.
+
 ## How It Works
 
 1. **Device Discovery**: Uses CoreAudio to enumerate audio devices and listen for changes.
@@ -101,7 +131,7 @@ Click "Edit" in the footer to:
 
 ```
 AudioPriorityBar/
-├── AudioPriorityBarApp.swift    # App entry, MenuBarExtra, AudioManager
+├── AudioPriorityBarApp.swift    # App entry, AppKit status item, AudioManager
 ├── Models/
 │   └── AudioDevice.swift        # Device model, OutputCategory enum
 ├── Services/

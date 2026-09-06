@@ -1,9 +1,65 @@
 import XCTest
 import CoreAudio
+import SwiftUI
+import AppKit
 @testable import AudioPriorityBar
 
 @MainActor
 final class AudioPriorityBarTests: XCTestCase {
+    func testPanelFitsSmallScreensInBothAppearances() throws {
+        let service = FakeAudioService(devices: [
+            AudioDevice(id: 1, uid: "desk", name: "Studio Display", type: .output),
+            AudioDevice(id: 2, uid: "builtin", name: "MacBook Pro Speakers", type: .output),
+            AudioDevice(id: 3, uid: "mic", name: "MacBook Pro Microphone", type: .input)
+        ])
+        let manager = AudioManager(deviceService: service, priorityManager: PriorityManager(defaults: isolatedDefaults()))
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for settings in [false, true] {
+                let view = NSHostingView(rootView: MenuBarView(showingSettings: .constant(settings))
+                    .environmentObject(manager)
+                    .environment(\.colorScheme, appearance == .darkAqua ? .dark : .light)
+                    .background(Color(nsColor: .windowBackgroundColor)))
+                let window = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
+                window.contentView = view
+                window.appearance = NSAppearance(named: appearance)
+                view.appearance = NSAppearance(named: appearance)
+                let size = view.fittingSize
+                XCTAssertEqual(size.width, 480, accuracy: 1)
+                XCTAssertGreaterThan(size.height, 400)
+                XCTAssertLessThan(size.height, 700, "Panel should fit below the menu bar on a 768-point screen")
+                view.frame = NSRect(origin: .zero, size: size)
+                view.layoutSubtreeIfNeeded()
+                view.displayIfNeeded()
+                if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: bitmap)
+                    if let png = bitmap.representation(using: .png, properties: [:]) {
+                        let name = "AudioPriorityBar-\(settings ? "settings" : "controls")-\(appearance.rawValue).png"
+                        try png.write(to: URL(fileURLWithPath: "/tmp").appendingPathComponent(name))
+                    }
+                }
+            }
+        }
+    }
+
+    func testChangingPanelVisibilityKeepsAudioRoutingAndOneSection() {
+        let service = FakeAudioService(devices: [
+            AudioDevice(id: 1, uid: "vocaster", name: "Vocaster", type: .output),
+            AudioDevice(id: 2, uid: "mic", name: "Microphone", type: .input)
+        ])
+        let manager = AudioManager(deviceService: service, priorityManager: PriorityManager(defaults: isolatedDefaults()))
+        let output = manager.currentOutputId
+        let input = manager.currentInputId
+        service.volumeWrites.removeAll()
+        manager.setDeviceTab(.headphone, visible: false)
+        manager.setDeviceTab(.speaker, visible: false)
+        manager.setDeviceTab(.microphone, visible: false)
+        XCTAssertEqual(manager.visibleDeviceTabs, [.microphone])
+        XCTAssertEqual(manager.defaultDeviceTab, .microphone)
+        XCTAssertEqual(manager.currentOutputId, output)
+        XCTAssertEqual(manager.currentInputId, input)
+        XCTAssertTrue(service.volumeWrites.isEmpty)
+    }
+
     func testInjectedPriorityManagerUsesIsolatedDefaults() {
         let defaults = UserDefaults(suiteName: "AudioPriorityBarXcodeTests")!
         defaults.removePersistentDomain(forName: "AudioPriorityBarXcodeTests")
@@ -73,9 +129,33 @@ final class AudioPriorityBarTests: XCTestCase {
         XCTAssertEqual(service.defaultOutputId, q2u.id)
     }
 
-    func testRelaunchOpensAFreshApplicationInstance() {
-        XCTAssertTrue(AppProcess.relaunchConfiguration().createsNewApplicationInstance)
-        XCTAssertTrue(AppProcess.relaunchConfiguration().activates)
+    func testRelaunchPassesCurrentProcessForStatusItemHandoff() {
+        XCTAssertEqual(AppProcess.relaunchArguments(), [
+            "--relaunch-after", String(ProcessInfo.processInfo.processIdentifier)
+        ])
+    }
+
+    func testNormalLaunchDoesNotWaitForAnotherProcess() {
+        XCTAssertTrue(AppProcess.waitForPreviousInstance(arguments: ["AudioPriorityBar"]))
+        XCTAssertTrue(AppProcess.waitForPreviousInstance(arguments: ["AudioPriorityBar", "--relaunch-after"]))
+        XCTAssertTrue(AppProcess.waitForPreviousInstance(arguments: ["AudioPriorityBar", "--relaunch-after", "invalid"]))
+    }
+
+    func testRelaunchWaitsForPreviousProcessToExit() throws {
+        let previous = Process()
+        previous.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        previous.arguments = ["0.2"]
+        try previous.run()
+        let finished = expectation(description: "Previous process exited")
+        DispatchQueue.global().async {
+            previous.waitUntilExit()
+            finished.fulfill()
+        }
+        XCTAssertTrue(AppProcess.waitForPreviousInstance(arguments: [
+            "AudioPriorityBar", "--relaunch-after", String(previous.processIdentifier)
+        ]))
+        XCTAssertFalse(previous.isRunning)
+        wait(for: [finished], timeout: 2)
     }
 
     func testMuteMicrophonesButtonUsesSlashedIconWhenMuted() {

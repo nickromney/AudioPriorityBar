@@ -124,3 +124,25 @@ struct AudioDevice: Identifiable, Equatable, Hashable {
         return result
     }
 }
+
+enum DeviceTab: String, CaseIterable {
+    case speaker
+    case headphone
+    case microphone
+
+    var label: String {
+        switch self {
+        case .speaker: return "Speakers"
+        case .headphone: return "Headphones"
+        case .microphone: return "Microphones"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .speaker: return "speaker.wave.2.fill"
+        case .headphone: return "headphones"
+        case .microphone: return "mic.fill"
+        }
+    }
+}
