@@ -28,5 +28,7 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Audio Priority Bar needs microphone access to list and switch input devices.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Audio Priority Bar needs Bluetooth access to read battery levels from connected headphones.</string>
 </dict>
 </plist>

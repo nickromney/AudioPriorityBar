@@ -51,6 +51,9 @@ struct AudioDevice: Identifiable, Equatable, Hashable {
     let name: String
     let type: AudioDeviceType
     var isConnected: Bool = true
+    /// Battery percentage reported by a connected Bluetooth device, when the
+    /// device exposes one. `nil` means that no readable battery status exists.
+    var batteryLevel: Int? = nil
     /// The Mac's own speakers or headphone jack. Always present and always
     /// mutable through CoreAudio, which makes it the reliable place to send
     /// audio when the device you are on refuses to go quiet.
