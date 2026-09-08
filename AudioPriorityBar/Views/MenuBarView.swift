@@ -309,7 +309,12 @@ struct DeviceCardList: View {
                         // Keep the subtitle's line allocated even when there is no
                         // status. Mute changes must not change a card's height and
                         // reflow the entire menu-bar panel.
-                        let status = statusText(isSelected: isSelected, isMuted: isMuted, isIgnoringMute: isIgnoringMute)
+                        let status = statusText(
+                            for: device,
+                            isSelected: isSelected,
+                            isMuted: isMuted,
+                            isIgnoringMute: isIgnoringMute
+                        )
                         Text(status ?? " ")
                             .font(PanelType.status)
                             .lineLimit(1)
@@ -419,11 +424,26 @@ struct DeviceCardList: View {
         return isMuted ? "Unmute this device" : "Mute this device"
     }
 
-    private func statusText(isSelected: Bool, isMuted: Bool, isIgnoringMute: Bool) -> String? {
-        if isIgnoringMute { return AudioMuteCopy.ignoredStatus }
-        if isMuted { return "Muted" }
-        if isSelected { return "Current" }
-        return nil
+    private func statusText(
+        for device: AudioDevice,
+        isSelected: Bool,
+        isMuted: Bool,
+        isIgnoringMute: Bool
+    ) -> String? {
+        var status: [String] = []
+
+        if category == .headphone, let batteryLevel = device.batteryLevel {
+            status.append("Battery \(batteryLevel)%")
+        }
+        if isIgnoringMute {
+            status.append(AudioMuteCopy.ignoredStatus)
+        } else if isMuted {
+            status.append("Muted")
+        } else if isSelected {
+            status.append("Current")
+        }
+
+        return status.isEmpty ? nil : status.joined(separator: " · ")
     }
 
     private func statusTint(isSelected: Bool, isIgnoringMute: Bool) -> Color {

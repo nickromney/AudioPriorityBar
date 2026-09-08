@@ -41,6 +41,7 @@ class AudioDeviceService: AudioDeviceServicing {
     var onDevicesChanged: (() -> Void)?
     var onMuteOrVolumeChanged: (() -> Void)?
 
+    private let bluetoothBatteryReader = BluetoothBatteryReader()
     private var listenerBlock: AudioObjectPropertyListenerBlock?
     private var muteVolumeListenerBlock: AudioObjectPropertyListenerBlock?
     private var monitoredDeviceIds: Set<AudioObjectID> = []
@@ -564,7 +565,18 @@ class AudioDeviceService: AudioDeviceServicing {
         guard let name = getDeviceName(id: id) else { return nil }
         guard let uid = getDeviceUID(id: id) else { return nil }
 
-        return AudioDevice(id: id, uid: uid, name: name, type: type, isBuiltIn: isBuiltIn(id: id))
+        let batteryLevel = type == .output
+            ? bluetoothBatteryReader.batteryLevel(for: AudioDevice(id: id, uid: uid, name: name, type: type))
+            : nil
+
+        return AudioDevice(
+            id: id,
+            uid: uid,
+            name: name,
+            type: type,
+            batteryLevel: batteryLevel,
+            isBuiltIn: isBuiltIn(id: id)
+        )
     }
 
     private func isBuiltIn(id: AudioObjectID) -> Bool {

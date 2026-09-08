@@ -16,6 +16,7 @@ let package = Package(
                 "Info.plist",
                 "AudioPriorityBarApp.swift",
                 "Services/AudioDeviceService.swift",
+                "Services/BluetoothBatteryReader.swift",
                 "Services/LaunchAtLoginManager.swift",
                 "Views"
             ],

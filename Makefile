@@ -48,7 +48,6 @@ build:
 dist:
 	@xcodebuild -project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
-		-destination "$(MACOS_DESTINATION)" \
 		-configuration Release \
 		-derivedDataPath "$(BUILD_DIR)" \
 		-arch arm64 -arch x86_64 \

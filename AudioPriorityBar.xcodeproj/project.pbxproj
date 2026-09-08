@@ -17,7 +17,9 @@
 		A10000000000000000000009 /* Headphones.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* Headphones.swift */; };
 		A10000000000000000000011 /* DeviceReorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* DeviceReorder.swift */; };
 		A10000000000000000000012 /* MuteLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* MuteLedger.swift */; };
+		A10000000000000000000014 /* BluetoothBatteryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* BluetoothBatteryReader.swift */; };
 		A10000000000000000000010 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* CoreAudio.framework */; };
+		A10000000000000000000013 /* IOBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* IOBluetooth.framework */; };
 		A10000000000000000000020 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* Assets.xcassets */; };
 		D10000000000000000000001 /* AudioPriorityBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* AudioPriorityBarTests.swift */; };
 		D10000000000000000000002 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002 /* XCTest.framework */; };
@@ -35,7 +37,9 @@
 		A20000000000000000000009 /* Headphones.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Headphones.swift; sourceTree = "<group>"; };
 		A20000000000000000000011 /* DeviceReorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceReorder.swift; sourceTree = "<group>"; };
 		A20000000000000000000012 /* MuteLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteLedger.swift; sourceTree = "<group>"; };
+		A20000000000000000000014 /* BluetoothBatteryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothBatteryReader.swift; sourceTree = "<group>"; };
 		A20000000000000000000010 /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
+		A20000000000000000000013 /* IOBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOBluetooth.framework; path = System/Library/Frameworks/IOBluetooth.framework; sourceTree = SDKROOT; };
 		A20000000000000000000020 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A30000000000000000000001 /* AudioPriorityBar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AudioPriorityBar.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D20000000000000000000001 /* AudioPriorityBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPriorityBarTests.swift; sourceTree = "<group>"; };
@@ -49,6 +53,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000010 /* CoreAudio.framework in Frameworks */,
+				A10000000000000000000013 /* IOBluetooth.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -101,6 +106,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000003 /* AudioDeviceService.swift */,
+				A20000000000000000000014 /* BluetoothBatteryReader.swift */,
 				A20000000000000000000004 /* PriorityManager.swift */,
 				A20000000000000000000008 /* LaunchAtLoginManager.swift */,
 			);
@@ -137,6 +143,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000010 /* CoreAudio.framework */,
+				A20000000000000000000013 /* IOBluetooth.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -251,6 +258,7 @@
 				A10000000000000000000012 /* MuteLedger.swift in Sources */,
 				A10000000000000000000009 /* Headphones.swift in Sources */,
 				A10000000000000000000003 /* AudioDeviceService.swift in Sources */,
+				A10000000000000000000014 /* BluetoothBatteryReader.swift in Sources */,
 				A10000000000000000000004 /* PriorityManager.swift in Sources */,
 				A10000000000000000000005 /* MenuBarView.swift in Sources */,
 				A10000000000000000000006 /* DeviceListView.swift in Sources */,

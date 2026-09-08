@@ -321,6 +321,7 @@ class AudioManager: ObservableObject {
 
     private let deviceService: any AudioDeviceServicing
     private var micFlashTimer: Timer?
+    private var batteryRefreshTimer: Timer?
     /// What the user asked to be silent, and what the hardware did about it.
     private var ledger = MuteLedger()
     /// Where the output was before Mute All moved it to guarantee silence.
@@ -728,6 +729,7 @@ class AudioManager: ObservableObject {
         refreshVolume()
         refreshInputGain()
         refreshMuteStatus()
+        setupBatteryRefreshTimer()
         // A mute-all latch is intentionally in-memory, but the hardware can
         // still be muted when the app is relaunched. Reconstruct the published
         // presentation state so the menu-bar icon matches what the user sees.
@@ -748,6 +750,14 @@ class AudioManager: ObservableObject {
                 // CoreAudio hides input streams until permission has been answered.
                 self?.refreshDevices()
                 self?.refreshMuteStatus()
+            }
+        }
+    }
+
+    private func setupBatteryRefreshTimer() {
+        batteryRefreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshDevices()
             }
         }
     }
