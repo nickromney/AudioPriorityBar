@@ -120,7 +120,7 @@ final class PriorityManagerTests: XCTestCase {
         manager.rememberDevice(old.uid, name: old.name, isInput: true)
         manager.setNeverUse(old, neverUse: true)
         manager.saveDeviceLevel(0.4, for: old.uid)
-        manager.migrateDeviceUIDIfNeeded(uid: new.uid, name: new.name, isInput: true)
+        manager.migrateDeviceUIDIfNeeded(uid: new.uid, name: new.name, isInput: true, connectedDevices: [new])
 
         XCTAssertTrue(manager.isNeverUse(new))
         XCTAssertEqual(manager.deviceLevel(for: new.uid), 0.4)
@@ -169,5 +169,60 @@ extension PriorityManagerTests {
             manager.sortByPriority([a, gone, b, c], category: .speaker).map(\.uid),
             ["a", "gone", "c", "b"]
         )
+    }
+}
+
+
+extension PriorityManagerTests {
+    func testUIDMigrationRejectsMultipleHistoricalNameMatches() {
+        let first = AudioDevice(id: 1, uid: "first", name: "USB Mic", type: .input)
+        let second = AudioDevice(id: 2, uid: "second", name: "USB Mic", type: .input)
+        let new = AudioDevice(id: 3, uid: "new", name: "USB Mic", type: .input)
+        for device in [first, second] {
+            manager.rememberDevice(device.uid, name: device.name, isInput: true)
+            manager.setNeverUse(device, neverUse: true)
+            manager.saveDeviceLevel(0.4, for: device.uid)
+        }
+        manager.migrateDeviceUIDIfNeeded(uid: new.uid, name: new.name, isInput: true, connectedDevices: [new])
+        XCTAssertFalse(manager.isNeverUse(new))
+        XCTAssertNil(manager.deviceLevel(for: new.uid))
+        XCTAssertNotNil(manager.getStoredDevice(uid: first.uid))
+        XCTAssertNotNil(manager.getStoredDevice(uid: second.uid))
+        XCTAssertEqual(manager.deviceLevel(for: first.uid), 0.4)
+        XCTAssertEqual(manager.deviceLevel(for: second.uid), 0.4)
+    }
+
+    func testUIDMigrationDoesNotStealFromConnectedDevice() {
+        let old = AudioDevice(id: 1, uid: "old", name: "USB Mic", type: .input)
+        let new = AudioDevice(id: 2, uid: "new", name: "USB Mic", type: .input)
+        manager.rememberDevice(old.uid, name: old.name, isInput: true)
+        manager.setNeverUse(old, neverUse: true)
+        manager.migrateDeviceUIDIfNeeded(uid: new.uid, name: new.name, isInput: true, connectedDevices: [new, old])
+        XCTAssertTrue(manager.isNeverUse(old))
+        XCTAssertFalse(manager.isNeverUse(new))
+        XCTAssertNotNil(manager.getStoredDevice(uid: old.uid))
+    }
+
+    func testUIDMigrationRejectsTwoNewConnectedNameMatches() {
+        let old = AudioDevice(id: 1, uid: "old", name: "USB Mic", type: .input)
+        let new = AudioDevice(id: 2, uid: "new", name: "USB Mic", type: .input)
+        let other = AudioDevice(id: 3, uid: "other", name: "USB Mic", type: .input)
+        manager.rememberDevice(old.uid, name: old.name, isInput: true)
+        manager.saveDeviceLevel(0.4, for: old.uid)
+        manager.migrateDeviceUIDIfNeeded(uid: new.uid, name: new.name, isInput: true, connectedDevices: [new, other])
+        XCTAssertEqual(manager.deviceLevel(for: old.uid), 0.4)
+        XCTAssertNil(manager.deviceLevel(for: new.uid))
+    }
+
+    func testUIDMigrationIgnoresOppositeDirectionNameMatch() {
+        let old = AudioDevice(id: 1, uid: "old", name: "USB", type: .input)
+        let new = AudioDevice(id: 2, uid: "new", name: "USB", type: .input)
+        let output = AudioDevice(id: 3, uid: "output", name: "USB", type: .output)
+        manager.rememberDevice(old.uid, name: old.name, isInput: true)
+        manager.rememberDevice(output.uid, name: output.name, isInput: false)
+        manager.saveDeviceLevel(0.4, for: old.uid)
+        manager.migrateDeviceUIDIfNeeded(uid: new.uid, name: new.name, isInput: true, connectedDevices: [output, new])
+        XCTAssertEqual(manager.deviceLevel(for: new.uid), 0.4)
+        XCTAssertNotNil(manager.getStoredDevice(uid: output.uid))
     }
 }

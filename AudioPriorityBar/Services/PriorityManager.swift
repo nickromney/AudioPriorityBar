@@ -100,11 +100,20 @@ class PriorityManager {
     /// Some USB devices (notably Studio Display audio) include the connection
     /// path in their UID and return with a new UID after reconnecting. Move the
     /// old device's settings before recording the new identity.
-    func migrateDeviceUIDIfNeeded(uid: String, name: String, isInput: Bool) {
+    func migrateDeviceUIDIfNeeded(uid: String, name: String, isInput: Bool, connectedDevices: [AudioDevice]) {
         guard getStoredDevice(uid: uid) == nil else { return }
-        guard let old = getKnownDevices().last(where: {
+        // A name is only a migration hint, never a unique device identity.
+        // Require one historical candidate and one connected match in the full
+        // discovery snapshot; otherwise keep each UID's settings untouched.
+        let candidates = getKnownDevices().filter {
             $0.uid != uid && $0.name == name && $0.isInput == isInput
-        }) else { return }
+        }
+        let connectedMatches = connectedDevices.filter {
+            $0.name == name && ($0.type == .input) == isInput
+        }
+        guard candidates.count == 1, let old = candidates.first,
+              connectedMatches.count == 1, connectedMatches.first?.uid == uid,
+              !connectedDevices.contains(where: { $0.uid == old.uid }) else { return }
 
         migrateUID(in: inputPrioritiesKey, from: old.uid, to: uid)
         migrateUID(in: speakerPrioritiesKey, from: old.uid, to: uid)
