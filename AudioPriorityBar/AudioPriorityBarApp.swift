@@ -806,7 +806,8 @@ class AudioManager: ObservableObject {
             priorityManager.migrateDeviceUIDIfNeeded(
                 uid: device.uid,
                 name: device.name,
-                isInput: device.type == .input
+                isInput: device.type == .input,
+                connectedDevices: allConnectedDevices
             )
             priorityManager.rememberDevice(device.uid, name: device.name, isInput: device.type == .input)
         }
