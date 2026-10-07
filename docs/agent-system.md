@@ -42,7 +42,8 @@ Examples containing placeholder paths or bracketed options are grammar.
 | --- | --- |
 | `swift test` | Isolated model/persistence tests; no live CoreAudio target |
 | `make build` | Debug build; no install/launch |
-| `make test` | Kills running AudioPriorityBar then launches hosted Xcode tests |
+| `make test` | Runs `swift test` (isolated core tests); no app kill or launch |
+| `make test-hosted` | Manual only, no gate calls it: kills running AudioPriorityBar then runs hosted Xcode tests |
 | `make dev` | Kills existing app, replaces ~/Applications bundle and launches; may change audio routing |
 
 ## Observe, verify and retain
@@ -73,11 +74,11 @@ checks retain their own scope and are not certified by this pass.
 
 ### TESTING.md
 
-Verification selection: start with `swift test` for model, reorder, mute-ledger and persistence changes. `make build` compiles the app without replacing or launching the installed copy. `make test` terminates the running app before hosted tests; it is a lifecycle effect as well as verification. Fake-service hosted renders do not prove physical device routing or Bartender placement. Record those manual observations with date, installed identity and device context.
+Verification selection: start with `swift test` for model, reorder, mute-ledger and persistence changes. `make build` compiles the app without replacing or launching the installed copy. `make test-hosted` terminates the running app before hosted tests; it is a lifecycle effect as well as verification and is run manually. Fake-service hosted renders do not prove physical device routing or Bartender placement. Record those manual observations with date, installed identity and device context.
 
 ## Executable local contract — 7 October 2026
 
-`make test-domain` enters MuteLedgerTests and proves testMuteAllLatchCoversOutputsButNotInputs; testReleasingTheLatchKeepsIndividuallyMutedDevicesMuted; testADeviceThatRefusedTheMuteIsReportedAsStillAudible. `make test-core` runs the full SwiftPM fixture suite. `make check-local` is the mandatory Lefthook pre-push gate and includes the existing full quality/build checks without installing or launching the resident app. Hardware, permissions and hosted app checks remain separate explicit actions.
+`make test-domain` enters MuteLedgerTests and proves testMuteAllLatchCoversOutputsButNotInputs; testReleasingTheLatchKeepsIndividuallyMutedDevicesMuted; testADeviceThatRefusedTheMuteIsReportedAsStillAudible. `make test-core` runs the full SwiftPM fixture suite. `make check-local` runs `test-core`, `build` and `git diff --check` without installing or launching the resident app; `lefthook.yml` runs it on pre-push once `lefthook install` has been run. Hosted tests are manual only (`make test-hosted`, which terminates the running app); no gate calls them. Hardware, permissions and hosted app checks remain separate explicit actions.
 
 Mute intent is keyed by device UID and retained separately from hardware readback: refused output remains known audible. Releasing the all-output latch preserves explicit per-device mute; releasing it is distinct from clearing every intent.
 
