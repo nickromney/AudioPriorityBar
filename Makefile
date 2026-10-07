@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-MAKE_KNOWN_GOALS := help build dist install dev run test clean
+MAKE_KNOWN_GOALS := help build dist install dev run test test-core test-domain test-hosted check-local clean
 
 APP_NAME := AudioPriorityBar
 PROJECT := AudioPriorityBar.xcodeproj
@@ -28,7 +28,8 @@ help:
 		'make build\tBuild the Debug app without installing it' \
 		'make dist\tBuild the Release app into dist/ for GitHub artifacts' \
 		'make install\tInstall the current dist/ app into ~/Applications' \
-		'make test\tRun the Xcode test target' \
+		'make test\tRun isolated core tests' \
+		'make test-hosted\tTerminate the running app and run hosted Xcode tests' \
 		'make clean\tRemove local build and distribution artifacts' \
 	| while IFS=$$'\t' read -r command description; do \
 		printf '  %-16s %s\n' "$$command" "$$description"; \
@@ -85,7 +86,7 @@ dev: build
 
 run: dev
 
-test:
+test-hosted:
 	@pkill -x "$(APP_NAME)" >/dev/null 2>&1 || true
 	@xcodebuild -project "$(PROJECT)" \
 		-scheme "$(SCHEME)" \
@@ -96,3 +97,16 @@ test:
 
 clean:
 	@rm -rf "$(BUILD_DIR)" "$(DIST_DIR)"
+
+test: test-core
+
+# Fixture/build checks never install or launch the resident application.
+.PHONY: test-core test-domain check-local
+test-core:
+	swift test
+
+test-domain:
+	swift test --filter MuteLedgerTests
+
+check-local: test-core build
+	git diff --check

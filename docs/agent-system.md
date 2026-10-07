@@ -74,3 +74,11 @@ checks retain their own scope and are not certified by this pass.
 ### TESTING.md
 
 Verification selection: start with `swift test` for model, reorder, mute-ledger and persistence changes. `make build` compiles the app without replacing or launching the installed copy. `make test` terminates the running app before hosted tests; it is a lifecycle effect as well as verification. Fake-service hosted renders do not prove physical device routing or Bartender placement. Record those manual observations with date, installed identity and device context.
+
+## Executable local contract — 7 October 2026
+
+`make test-domain` enters MuteLedgerTests and proves testMuteAllLatchCoversOutputsButNotInputs; testReleasingTheLatchKeepsIndividuallyMutedDevicesMuted; testADeviceThatRefusedTheMuteIsReportedAsStillAudible. `make test-core` runs the full SwiftPM fixture suite. `make check-local` is the mandatory Lefthook pre-push gate and includes the existing full quality/build checks without installing or launching the resident app. Hardware, permissions and hosted app checks remain separate explicit actions.
+
+Mute intent is keyed by device UID and retained separately from hardware readback: refused output remains known audible. Releasing the all-output latch preserves explicit per-device mute; releasing it is distinct from clearing every intent.
+
+The source-bound action/learning descriptor is [.agent/contract.json](../.agent/contract.json). A changed source or test invalidates the applicable lesson; re-run the named domain proof before retaining new guidance. Dependency resolution uses a seven-day cooldown for active update managers and uv tooling; existing locked app dependencies are retained.
