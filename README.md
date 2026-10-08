@@ -155,7 +155,3 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Acknowledgments
 
 Built with SwiftUI and CoreAudio for macOS.
-
-## Agent operation and plan status
-
-For the current ownership, action-effect and evidence contracts, use [the operating model](docs/agent-system.md). Its implemented plan covers agent navigation and documentation. Feature proposals below remain proposals until their own acceptance evidence is recorded; dated observations retain their original scope.

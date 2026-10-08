@@ -76,16 +76,3 @@ For the live Bartender check:
 The preference import deliberately excludes AppKit position and visibility
 keys. Tests use isolated defaults and do not migrate the installed copy's
 preferences.
-
-## Workflow and evidence contract
-
-Reviewed 6 October 2026. Commands below select existing verification seams;
-attended hardware and native lifecycle claims retain their own evidence requirements.
-
-| Decision | Owner | Smallest verification | Evidence and effects |
-| --- | --- | --- | --- |
-| Persisted UID, reorder or mute policy | Tests/AudioPriorityBarCoreTests | swift test | Synthetic defaults/devices; no CoreAudio routing |
-| AudioManager orchestration or native controls | AudioPriorityBarTests | Hosted Xcode test after explicit app shutdown | Fake AudioDeviceServicing; process lifecycle changes |
-| Physical routing/Bartender placement | Installed signed app plus observed devices | Attended installed-app check | Record device UID, date, bundle identity and actual route |
-
-Verification selection: start with `swift test` for model, reorder, mute-ledger and persistence changes. `make build` compiles the app without replacing or launching the installed copy. `make test-hosted` terminates the running app before hosted tests; it is a lifecycle effect as well as verification. Fake-service hosted renders do not prove physical device routing or Bartender placement. Record those manual observations with date, installed identity and device context.
