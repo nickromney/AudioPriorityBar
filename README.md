@@ -56,6 +56,8 @@ Other useful commands:
 - `make install` — install the current Release artifact into `~/Applications`
 - `make clean` — remove local build and distribution artifacts
 
+Run `lefthook install` once in a clone to enable the pre-push gate (`make check-local`).
+
 Or open `AudioPriorityBar.xcodeproj` in Xcode and build with ⌘R.
 
 ### Download Release
