@@ -110,3 +110,6 @@ test-domain:
 
 check-local: test-core build
 	git diff --check
+
+VERIFY_SKILL := skills/verify-audio-priority-bar
+include $(VERIFY_SKILL)/verify.mk
