@@ -23,6 +23,8 @@
 		A10000000000000000000020 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* Assets.xcassets */; };
 		D10000000000000000000001 /* AudioPriorityBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* AudioPriorityBarTests.swift */; };
 		D10000000000000000000002 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002 /* XCTest.framework */; };
+		E10000000000000000000001 /* AudioPriorityBarUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000001 /* AudioPriorityBarUITests.swift */; };
+		E10000000000000000000002 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E20000000000000000000002 /* XCTest.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +47,9 @@
 		D20000000000000000000001 /* AudioPriorityBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPriorityBarTests.swift; sourceTree = "<group>"; };
 		D20000000000000000000002 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 		D30000000000000000000001 /* AudioPriorityBarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AudioPriorityBarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E20000000000000000000001 /* AudioPriorityBarUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPriorityBarUITests.swift; sourceTree = "<group>"; };
+		E20000000000000000000002 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		E30000000000000000000001 /* AudioPriorityBarUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AudioPriorityBarUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,6 +70,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E40000000000000000000001 /* UI Test Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (E10000000000000000000002 /* XCTest.framework in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -73,6 +79,7 @@
 			children = (
 				A50000000000000000000002 /* AudioPriorityBar */,
 				B50000000000000000000001 /* AudioPriorityBarTests */,
+				E50000000000000000000001 /* AudioPriorityBarUITests */,
 				A50000000000000000000007 /* Frameworks */,
 				A50000000000000000000006 /* Products */,
 			);
@@ -127,6 +134,7 @@
 			children = (
 				A30000000000000000000001 /* AudioPriorityBar.app */,
 				D30000000000000000000001 /* AudioPriorityBarTests.xctest */,
+				E30000000000000000000001 /* AudioPriorityBarUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -139,6 +147,7 @@
 			path = AudioPriorityBarTests;
 			sourceTree = "<group>";
 		};
+		E50000000000000000000001 /* AudioPriorityBarUITests */ = {isa = PBXGroup; children = (E20000000000000000000001 /* AudioPriorityBarUITests.swift */,); path = AudioPriorityBarUITests; sourceTree = "<group>"; };
 		A50000000000000000000007 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -204,6 +213,7 @@
 			productReference = D30000000000000000000001 /* AudioPriorityBarTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		E60000000000000000000001 /* AudioPriorityBarUITests */ = {isa = PBXNativeTarget; buildConfigurationList = E80000000000000000000001 /* Build configuration list for PBXNativeTarget "AudioPriorityBarUITests" */; buildPhases = (E70000000000000000000001 /* UI Test Sources */, E40000000000000000000001 /* UI Test Frameworks */); buildRules = (); dependencies = (B90000000000000000000001 /* App Target Dependency */,); name = AudioPriorityBarUITests; productName = AudioPriorityBarUITests; productReference = E30000000000000000000001 /* AudioPriorityBarUITests.xctest */; productType = "com.apple.product-type.bundle.ui-testing"; };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -238,8 +248,10 @@
 			targets = (
 				A60000000000000000000001 /* AudioPriorityBar */,
 				B70000000000000000000001 /* AudioPriorityBarTests */,
+				E60000000000000000000001 /* AudioPriorityBarUITests */,
 			);
 		};
+		E70000000000000000000001 /* UI Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (E10000000000000000000001 /* AudioPriorityBarUITests.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 		B90000000000000000000001 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = A60000000000000000000001 /* AudioPriorityBar */;
@@ -497,6 +509,8 @@
 			};
 			name = Release;
 		};
+		E90000000000000000000001 /* Debug UI Tests */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 13.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.AudioPriorityBarUITests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_VERSION = 5.0; TEST_TARGET_NAME = AudioPriorityBar;}; name = Debug;};
+		E90000000000000000000002 /* Release UI Tests */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 13.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.AudioPriorityBarUITests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_VERSION = 5.0; TEST_TARGET_NAME = AudioPriorityBar;}; name = Release;};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -527,6 +541,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		E80000000000000000000001 /* UI Test Configuration List */ = {isa = XCConfigurationList; buildConfigurations = (E90000000000000000000001 /* Debug UI Tests */, E90000000000000000000002 /* Release UI Tests */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
 /* End XCConfigurationList section */
 
 	};

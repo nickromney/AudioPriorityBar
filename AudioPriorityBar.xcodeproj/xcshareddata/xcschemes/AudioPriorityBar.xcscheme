@@ -52,6 +52,9 @@
                ReferencedContainer = "container:AudioPriorityBar.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference skipped = "NO">
+            <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "E60000000000000000000001" BuildableName = "AudioPriorityBarUITests.xctest" BlueprintName = "AudioPriorityBarUITests" ReferencedContainer = "container:AudioPriorityBar.xcodeproj" />
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

@@ -16,5 +16,17 @@ setup() {
   run "$CONTROL" --dry-run exercise
   [ "$status" -eq 0 ]
   [[ "$output" == *"swift test"* ]]
-  [[ "$output" == *"xcodebuild build"* ]]
+  [[ "$output" == *"build and run the XCUITest"* ]]
+  [[ "$output" == *"XCUITest fake-device journey"* ]]
+}
+
+@test "exercise recipe builds and drives the isolated fake-device UI" {
+  run grep -F 'PRODUCT_BUNDLE_IDENTIFIER=com.example.AudioPriorityBar.verify' "$CONTROL"
+  [ "$status" -eq 0 ]
+  run grep -F -- '--verify-ui' "$REPO_ROOT/AudioPriorityBar/AudioPriorityBarApp.swift"
+  [ "$status" -eq 0 ]
+  run grep -F 'real-prefs-before.txt' "$CONTROL"
+  [ "$status" -eq 0 ]
+  run grep -F 'testFakeDeviceCanBeReorderedInMenuBarPanel' "$CONTROL"
+  [ "$status" -eq 0 ]
 }

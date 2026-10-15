@@ -4,7 +4,7 @@ set -euo pipefail
 
 VK_SCRIPT="$0"
 VK_APP="audio-priority-bar"
-VK_DESCRIPTION="Verify Audio Priority Bar's native core tests and build without installing or launching the app."
+VK_DESCRIPTION="Verify Audio Priority Bar with core tests and a fake-device menu-bar UI journey."
 VK_PROJECT_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 # shellcheck source=verify-lib.sh disable=SC1091
 . "$(cd "$(dirname "$0")" && pwd)/verify-lib.sh"
@@ -22,14 +22,19 @@ vk_paths() {
   STATE="$VK_BASE_DIR/$VK_RUN_ID/state"
   EVIDENCE="$VK_EVIDENCE_ROOT/$VK_RUN_ID"
   DERIVED="$STATE/DerivedData"
+  REAL_PREFS="$HOME/Library/Preferences/com.example.AudioPriorityBar.plist"
+}
+
+real_state_digest() {
+  if [ -f "$REAL_PREFS" ]; then shasum -a 256 "$REAL_PREFS" | awk '{print $1}'; else printf '%s\n' absent; fi
 }
 
 vk_plan() {
   case "$1" in
-    verify) vk_plan_line "capture installed toolchain, run swift core tests, build app into isolated state; evidence in $EVIDENCE" ;;
+    verify) vk_plan_line "capture installed toolchain, run core pre-check and fake-device XCUITest journey under isolated state, compare real preferences, then clean up; evidence in $EVIDENCE" ;;
     launch) vk_plan_line "record swift and Xcode versions under $STATE" ;;
     doctor) vk_plan_line "check AudioPriorityBar.xcodeproj, Package.swift, and installed toolchain" ;;
-    exercise) vk_plan_line "run swift test with isolated scratch space and xcodebuild build with 2 jobs under $STATE" ;;
+    exercise) vk_plan_line "run swift test pre-check, build and run the XCUITest fake-device journey under a throwaway bundle id; guard real preferences" ;;
     cleanup) vk_plan_line "remove $STATE; keep build/test logs in $EVIDENCE" ;;
     *) vk_unknown_command ;;
   esac
@@ -59,6 +64,8 @@ cmd_doctor() {
 
 cmd_exercise() {
   cmd_doctor >/dev/null
+  real_state_digest > "$STATE/real-prefs-before.txt"
+  defaults delete com.example.AudioPriorityBar.verify >/dev/null 2>&1 || true
   (
     cd "$VK_PROJECT_ROOT"
     swift test --scratch-path "$STATE/swiftpm" --jobs 2
@@ -72,12 +79,22 @@ cmd_exercise() {
     -derivedDataPath "$DERIVED" \
     -jobs 2 \
     -disableAutomaticPackageResolution \
-    CODE_SIGNING_ALLOWED=NO \
-    build > "$STATE/xcodebuild.log" 2>&1
+    PRODUCT_BUNDLE_IDENTIFIER=com.example.AudioPriorityBar.verify \
+    CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
+    build-for-testing > "$STATE/xcodebuild.log" 2>&1
   [ -d "$DERIVED/Build/Products/Debug/AudioPriorityBar.app" ] || { vk_fail "isolated app build product is missing"; return 1; }
+  local xctestrun
+  xctestrun="$(find "$DERIVED/Build/Products" -maxdepth 1 -name '*.xctestrun' | head -1)"
+  [ -n "$xctestrun" ] || { vk_fail "XCUITest build product is missing"; return 1; }
+  xcodebuild test-without-building -xctestrun "$xctestrun" \
+    -destination "platform=macOS,arch=$(uname -m)" \
+    -only-testing:AudioPriorityBarUITests/AudioPriorityBarUITests/testFakeDeviceCanBeReorderedInMenuBarPanel \
+    -resultBundlePath "$EVIDENCE/ui.xcresult" > "$EVIDENCE/xcode-ui-test.log" 2>&1 || { vk_fail "menu-bar UI journey failed; see $EVIDENCE/xcode-ui-test.log"; return 1; }
+  real_state_digest > "$STATE/real-prefs-after.txt"
+  cmp -s "$STATE/real-prefs-before.txt" "$STATE/real-prefs-after.txt" || { vk_fail "real app preferences changed during UI verification"; return 1; }
   cp "$STATE/swift-test.log" "$EVIDENCE/swift-test.log"
   cp "$STATE/xcodebuild.log" "$EVIDENCE/xcodebuild.log"
-  vk_say "core tests passed and app built under isolated run state"
+  vk_say "core pre-check and fake-device menu-bar UI journey passed; real preferences unchanged"
 }
 
 cmd_cleanup() {
@@ -86,6 +103,7 @@ cmd_cleanup() {
     [ ! -f "$STATE/xcodebuild.log" ] || cp "$STATE/xcodebuild.log" "$EVIDENCE/xcodebuild.log"
   fi
   rm -rf "${STATE:?}"
+  defaults delete com.example.AudioPriorityBar.verify >/dev/null 2>&1 || true
   rmdir "$VK_BASE_DIR/$VK_RUN_ID" 2>/dev/null || true
   vk_clear_current
   vk_say "removed run-owned Swift scratch and app build; evidence kept at $EVIDENCE"
