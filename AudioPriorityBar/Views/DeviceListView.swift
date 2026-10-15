@@ -318,7 +318,7 @@ struct DeviceRankControl: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            arrow("chevron.up", enabled: canMoveUp) {
+            arrow("chevron.up", enabled: canMoveUp, identifier: "move-up-\(uid)") {
                 if let move = DeviceReorder.moveUp(index: index, count: count) {
                     onMove?(move.from, move.to)
                 }
@@ -329,7 +329,7 @@ struct DeviceRankControl: View {
                 .foregroundStyle(foreground)
                 .frame(maxHeight: .infinity)
 
-            arrow("chevron.down", enabled: canMoveDown) {
+            arrow("chevron.down", enabled: canMoveDown, identifier: "move-down-\(uid)") {
                 if let move = DeviceReorder.moveDown(index: index, count: count) {
                     onMove?(move.from, move.to)
                 }
@@ -344,9 +344,12 @@ struct DeviceRankControl: View {
         .onHover { isHovering = $0 }
         .help("Use the arrows to reorder, or drag this handle")
         .draggable(uid)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("device-rank-\(uid)")
+        .accessibilityValue("\(index + 1)")
     }
 
-    private func arrow(_ systemName: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    private func arrow(_ systemName: String, enabled: Bool, identifier: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 9, weight: .bold))
@@ -356,6 +359,8 @@ struct DeviceRankControl: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityLabel("Move device \(systemName == "chevron.up" ? "up" : "down")")
+        .accessibilityIdentifier(identifier)
     }
 }
 

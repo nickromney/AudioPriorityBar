@@ -659,3 +659,30 @@ class AudioDeviceService: AudioDeviceServicing {
         stopListening()
     }
 }
+
+/// Selected only by the private --verify-ui launch argument. Synthetic IDs and
+/// no-op setters keep UI verification away from CoreAudio hardware changes.
+final class VerifyAudioDeviceService: AudioDeviceService {
+    private let fakeDevices = [
+        AudioDevice(id: 90001, uid: "verify-speaker-a", name: "Verify Speaker A", type: .output, isBuiltIn: true),
+        AudioDevice(id: 90002, uid: "verify-speaker-b", name: "Verify Speaker B", type: .output),
+        AudioDevice(id: 90003, uid: "verify-microphone", name: "Verify Microphone", type: .input)
+    ]
+
+    override func getDevices() -> [AudioDevice] { fakeDevices }
+    override func getCurrentDefaultDevice(type: AudioDeviceType) -> AudioObjectID? {
+        type == .input ? 90003 : 90001
+    }
+    override func setDefaultDevice(_ deviceId: AudioObjectID, type: AudioDeviceType) {}
+    override func getOutputVolume() -> Float { 0.5 }
+    override func getInputVolume() -> Float { 0.5 }
+    override func getDeviceVolume(_ deviceId: AudioObjectID, type: AudioDeviceType) -> Float { 0.5 }
+    override func readDeviceVolume(_ deviceId: AudioObjectID, type: AudioDeviceType) -> Float? { 0.5 }
+    override func setOutputVolume(_ volume: Float, force: Bool) {}
+    override func setInputVolume(_ volume: Float, force: Bool) {}
+    override func setDeviceVolume(_ volume: Float, deviceId: AudioObjectID, type: AudioDeviceType, force: Bool) -> Bool { false }
+    override func supportsDeviceVolumeControl(_ deviceId: AudioObjectID, type: AudioDeviceType) -> Bool { true }
+    override func isDeviceMuted(_ deviceId: AudioObjectID, type: AudioDeviceType) -> Bool { false }
+    override func setDeviceMuted(_ muted: Bool, deviceId: AudioObjectID, type: AudioDeviceType) -> Bool { false }
+    override func startListening() {}
+}

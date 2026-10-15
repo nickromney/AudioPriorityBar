@@ -110,6 +110,7 @@ final class StatusItemController: NSObject, ObservableObject, NSPopoverDelegate 
     private static let mutedImage = makeStatusItemImage(symbol: "speaker.slash.fill")
     private let popover = NSPopover()
     private var observation: AnyCancellable?
+    private var verifyWindow: NSWindow?
 
     init(audioManager: AudioManager) {
         self.audioManager = audioManager
@@ -130,6 +131,21 @@ final class StatusItemController: NSObject, ObservableObject, NSPopoverDelegate 
             .sink { [weak self] isMuted in
                 self?.updateStatusItem(isMuted: isMuted)
             }
+    }
+
+    /// --verify-ui only: show the same panel in an ordinary window so UI
+    /// verification does not depend on free menu-bar space.
+    func showVerifyWindow() {
+        let window = NSWindow(contentViewController: NSHostingController(
+            rootView: StatusItemPanel(controller: self, audioManager: audioManager)
+        ))
+        window.title = "Audio Priority Bar Verify"
+        window.identifier = NSUserInterfaceItemIdentifier("AudioPriorityBar.verifyWindow")
+        window.isReleasedWhenClosed = false
+        window.center()
+        verifyWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     func install() {
@@ -237,20 +253,27 @@ struct AudioPriorityBarApp: App {
     @StateObject private var statusItemController: StatusItemController
 
     init() {
-        guard RunContext.isRunningTests || (AppProcess.waitForPreviousInstance() && SingleInstanceGuard.shared.acquire()) else {
+        let verifyUI = ProcessInfo.processInfo.arguments.contains("--verify-ui")
+        guard RunContext.isRunningTests || verifyUI || (AppProcess.waitForPreviousInstance() && SingleInstanceGuard.shared.acquire()) else {
             // Another copy already owns the menu-bar slot. Exit quietly so a
             // second app bundle cannot leave a confusing duplicate icon.
             exit(EXIT_SUCCESS)
         }
-        if !RunContext.isRunningTests,
+        if !RunContext.isRunningTests && !verifyUI,
            let legacy = UserDefaults.standard.persistentDomain(forName: "com.example.AudioPriorityBarTestsHost") {
             PriorityManager().importLegacyDebugPreferences(legacy)
         }
-        let manager = AudioManager()
+        let manager = AudioManager(
+            deviceService: verifyUI ? VerifyAudioDeviceService() : AudioDeviceService(),
+            requestMicrophoneAccess: !verifyUI
+        )
         _audioManager = StateObject(wrappedValue: manager)
         let controller = StatusItemController(audioManager: manager)
         _statusItemController = StateObject(wrappedValue: controller)
         controller.install()
+        if verifyUI {
+            DispatchQueue.main.async { controller.showVerifyWindow() }
+        }
     }
     
     var body: some Scene {
@@ -714,7 +737,8 @@ class AudioManager: ObservableObject {
 
     init(
         deviceService: any AudioDeviceServicing = AudioDeviceService(),
-        priorityManager: PriorityManager = PriorityManager()
+        priorityManager: PriorityManager = PriorityManager(),
+        requestMicrophoneAccess: Bool = true
     ) {
         self.deviceService = deviceService
         self.priorityManager = priorityManager
@@ -736,7 +760,7 @@ class AudioManager: ObservableObject {
         isMuteAllActive = areAllOutputsMuted
         setupDeviceChangeListener()
         setupMuteVolumeListener()
-        requestMicrophoneAccessIfNeeded()
+        if requestMicrophoneAccess { requestMicrophoneAccessIfNeeded() }
         if !isCustomMode {
             applyHighestPriorityInput()
             applyHighestPriorityOutput()
