@@ -34,11 +34,131 @@ final class AudioPriorityBarTests: XCTestCase {
                     view.cacheDisplay(in: view.bounds, to: bitmap)
                     if let png = bitmap.representation(using: .png, properties: [:]) {
                         let name = "AudioPriorityBar-\(settings ? "settings" : "controls")-\(appearance.rawValue).png"
-                        try png.write(to: URL(fileURLWithPath: "/tmp").appendingPathComponent(name))
+                        try retainEvidence(png, name: name)
                     }
                 }
             }
         }
+    }
+
+    func testSingletonLockRejectsPeerAndReleasesForNextPeer() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let lock = directory.appendingPathComponent("isolated.instance.lock")
+        let guardOwner = SingleInstanceGuard(lockURL: lock)
+        XCTAssertTrue(guardOwner.acquire())
+        defer { guardOwner.release() }
+        func peerStatus() throws -> Int32 {
+            let peer = Process()
+            peer.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            peer.arguments = ["-c", "import fcntl,sys\nf=open(sys.argv[1],'a')\ntry: fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(3)", lock.path]
+            try peer.run()
+            peer.waitUntilExit()
+            return peer.terminationStatus
+        }
+        XCTAssertEqual(try peerStatus(), 3, "Independent process must refuse an owned lock")
+        guardOwner.release()
+        XCTAssertEqual(try peerStatus(), 0, "Independent process can acquire after release")
+        try retainEvidence(Data("Isolated flock: peer refused while held, acquired after release. Installed app singleton not exercised.\n".utf8), name: "singleton-lock.txt")
+    }
+
+    func testHostedAppStartupHasNoProductionControllers() {
+        XCTAssertTrue(RunContext.isRunningTests)
+        let app = AudioPriorityBarApp()
+        // Stored production owners must be absent before a test creates its fake manager.
+        let owners = Mirror(reflecting: app).children.filter { $0.label == "audioManager" || $0.label == "statusItemController" }
+        XCTAssertEqual(owners.count, 2)
+        for child in owners {
+            if child.label == "audioManager" || child.label == "statusItemController" {
+                XCTAssertEqual(Mirror(reflecting: child.value).children.count, 0, child.label ?? "owner")
+            }
+        }
+    }
+
+    func testRenderedMuteButtonKeepsVolumeAndRowGeometry() throws {
+        let speaker = AudioDevice(id: 1, uid: "desk", name: "Desk Speakers", type: .output)
+        let service = FakeAudioService(devices: [speaker,
+            AudioDevice(id: 2, uid: "second", name: "Second Speakers", type: .output)])
+        let manager = AudioManager(deviceService: service, priorityManager: PriorityManager(defaults: isolatedDefaults()))
+        let view = NSHostingView(rootView: MenuBarView(showingSettings: .constant(false)).environmentObject(manager))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 650),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = view
+        defer { window.orderOut(nil) }
+        view.frame = NSRect(origin: .zero, size: view.fittingSize)
+        window.setContentSize(view.fittingSize)
+        window.makeKeyAndOrderFront(nil)
+        func settle() {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+            view.layoutSubtreeIfNeeded()
+            view.displayIfNeeded()
+        }
+        // SwiftUI accessibility nodes do not all adopt the full AppKit protocol.
+        // Walk the Objective-C children selector without dropping those nodes.
+        func elements(_ element: NSObject) -> [NSObject] {
+            let selector = NSSelectorFromString("accessibilityChildren")
+            let children = element.responds(to: selector)
+                ? element.perform(selector)?.takeUnretainedValue() as? [NSObject] : nil
+            return [element] + (children ?? []).flatMap(elements)
+        }
+        func label(_ element: NSObject) -> String? {
+            let selector = NSSelectorFromString("accessibilityLabel")
+            return element.responds(to: selector)
+                ? element.perform(selector)?.takeUnretainedValue() as? String : nil
+        }
+        func find(_ wanted: String) throws -> NSObject {
+            try XCTUnwrap(elements(view).first { label($0) == wanted }, "Missing rendered control \(wanted)")
+        }
+        func frame(_ element: NSObject) throws -> NSRect {
+            if let accessible = element as? any NSAccessibilityProtocol { return accessible.accessibilityFrame() }
+            if let accessible = element as? any NSAccessibilityElementProtocol { return accessible.accessibilityFrame() }
+            return try XCTUnwrap(nil as NSRect?, "No accessibility frame for \(type(of: element))")
+        }
+        func press(_ element: NSObject) throws -> Bool {
+            let selector = NSSelectorFromString("accessibilityPerformPress")
+            XCTAssertTrue(element.responds(to: selector), "Rendered button must expose press")
+            guard element.responds(to: selector) else { return false }
+            typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+            return unsafeBitCast(element.method(for: selector), to: Action.self)(element, selector)
+        }
+        func image(_ name: String) throws {
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try retainEvidence(XCTUnwrap(bitmap.representation(using: .png, properties: [:])), name: name)
+        }
+        settle()
+        let tree = elements(view).map { "\(type(of: $0)): \(label($0) ?? "<no label>") \(String(describing: try? frame($0)))" }.joined(separator: "\n")
+        try retainEvidence(Data(tree.utf8), name: "rendered-accessibility-tree.txt")
+        try image("rendered-before-lookup.png")
+        let sliderBefore = try frame(find("Output volume"))
+        let muteBefore = try frame(find("Mute Desk Speakers"))
+        XCTAssertGreaterThan(sliderBefore.width, 0)
+        XCTAssertGreaterThan(muteBefore.width, 0)
+        try image("rendered-before-mute.png")
+        XCTAssertTrue(try press(find("Mute Desk Speakers")))
+        settle()
+        XCTAssertTrue(manager.isDeviceMuted(speaker))
+        XCTAssertEqual(service.getDeviceVolume(speaker.id), 0, accuracy: 0.001)
+        XCTAssertEqual(try frame(find("Output volume")), sliderBefore)
+        XCTAssertEqual(try frame(find("Unmute Desk Speakers")), muteBefore)
+        try image("rendered-after-mute.png")
+        XCTAssertTrue(try press(find("Unmute Desk Speakers")))
+        settle()
+        XCTAssertFalse(manager.isDeviceMuted(speaker))
+        XCTAssertGreaterThan(service.getDeviceVolume(speaker.id), 0.01)
+        XCTAssertEqual(try frame(find("Output volume")), sliderBefore)
+        try image("rendered-after-unmute.png")
+        let trace = "Pressed rendered Mute and Unmute Desk Speakers through AppKit accessibility. Fake service volume independently read back. Slider and mute button frames unchanged: \(sliderBefore), \(muteBefore). Physical audio not exercised.\n"
+        try retainEvidence(Data(trace.utf8), name: "rendered-actions.txt")
+    }
+
+    private func retainEvidence(_ data: Data, name: String) throws {
+        let directory = ProcessInfo.processInfo.environment["APB_VERIFY_EVIDENCE"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("AudioPriorityBar-hosted-evidence", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try data.write(to: directory.appendingPathComponent(name))
     }
 
     func testChangingPanelVisibilityKeepsAudioRoutingAndOneSection() {
