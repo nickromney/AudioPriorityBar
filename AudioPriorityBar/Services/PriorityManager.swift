@@ -1,12 +1,19 @@
 import Foundation
 
-struct StoredDevice: Codable, Equatable {
-    let uid: String
-    let name: String
-    let isInput: Bool
-    var lastSeen: Date
+public struct StoredDevice: Codable, Equatable {
+    public let uid: String
+    public let name: String
+    public let isInput: Bool
+    public var lastSeen: Date
 
-    var lastSeenRelative: String {
+    public init(uid: String, name: String, isInput: Bool, lastSeen: Date) {
+        self.uid = uid
+        self.name = name
+        self.isInput = isInput
+        self.lastSeen = lastSeen
+    }
+
+    public var lastSeenRelative: String {
         let now = Date()
         let interval = now.timeIntervalSince(lastSeen)
 
@@ -31,16 +38,16 @@ struct StoredDevice: Codable, Equatable {
     }
 }
 
-class PriorityManager {
+public class PriorityManager {
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
     }
 
     /// Import missing app preferences from builds that used the test-host ID.
     /// AppKit's saved positions and visibility must stay in their own domain.
-    func importLegacyDebugPreferences(_ legacy: [String: Any]) {
+    public func importLegacyDebugPreferences(_ legacy: [String: Any]) {
         let marker = "didImportLegacyDebugPreferences"
         guard !defaults.bool(forKey: marker) else { return }
         let keys = [
@@ -77,7 +84,7 @@ class PriorityManager {
 
     // MARK: - Known Devices (Persistent Memory)
 
-    func getKnownDevices() -> [StoredDevice] {
+    public func getKnownDevices() -> [StoredDevice] {
         guard let data = defaults.data(forKey: knownDevicesKey),
               let devices = try? JSONDecoder().decode([StoredDevice].self, from: data) else {
             return []
@@ -85,7 +92,7 @@ class PriorityManager {
         return devices
     }
 
-    func rememberDevice(_ uid: String, name: String, isInput: Bool) {
+    public func rememberDevice(_ uid: String, name: String, isInput: Bool) {
         var known = getKnownDevices()
         let now = Date()
         if let index = known.firstIndex(where: { $0.uid == uid }) {
@@ -100,7 +107,7 @@ class PriorityManager {
     /// Some USB devices (notably Studio Display audio) include the connection
     /// path in their UID and return with a new UID after reconnecting. Move the
     /// old device's settings before recording the new identity.
-    func migrateDeviceUIDIfNeeded(uid: String, name: String, isInput: Bool, connectedDevices: [AudioDevice]) {
+    public func migrateDeviceUIDIfNeeded(uid: String, name: String, isInput: Bool, connectedDevices: [AudioDevice]) {
         guard getStoredDevice(uid: uid) == nil else { return }
         // A name is only a migration hint, never a unique device identity.
         // Require one historical candidate and one connected match in the full
@@ -135,11 +142,11 @@ class PriorityManager {
         saveKnownDevices(known)
     }
 
-    func getStoredDevice(uid: String) -> StoredDevice? {
+    public func getStoredDevice(uid: String) -> StoredDevice? {
         getKnownDevices().first { $0.uid == uid }
     }
 
-    func forgetDevice(_ uid: String) {
+    public func forgetDevice(_ uid: String) {
         var known = getKnownDevices()
         known.removeAll { $0.uid == uid }
         saveKnownDevices(known)
@@ -153,7 +160,7 @@ class PriorityManager {
 
     // MARK: - Mode Management
 
-    var currentMode: OutputCategory {
+    public var currentMode: OutputCategory {
         get {
             guard let raw = defaults.string(forKey: currentModeKey),
                   let mode = OutputCategory(rawValue: raw) else {
@@ -166,7 +173,7 @@ class PriorityManager {
         }
     }
 
-    var defaultOutputCategory: OutputCategory {
+    public var defaultOutputCategory: OutputCategory {
         get {
             guard let raw = defaults.string(forKey: defaultOutputCategoryKey),
                   let category = OutputCategory(rawValue: raw) else { return .speaker }
@@ -175,7 +182,7 @@ class PriorityManager {
         set { defaults.set(newValue.rawValue, forKey: defaultOutputCategoryKey) }
     }
 
-    var visibleDeviceTabs: [DeviceTab] {
+    public var visibleDeviceTabs: [DeviceTab] {
         get {
             guard let stored = defaults.stringArray(forKey: "visibleDeviceTabs") else {
                 return DeviceTab.allCases
@@ -190,7 +197,7 @@ class PriorityManager {
         }
     }
 
-    var defaultDeviceTab: DeviceTab {
+    public var defaultDeviceTab: DeviceTab {
         get {
             let preferred = defaults.string(forKey: "defaultDeviceTab").flatMap(DeviceTab.init(rawValue:))
                 ?? (defaultOutputCategory == .headphone ? .headphone : .speaker)
@@ -202,7 +209,7 @@ class PriorityManager {
         }
     }
 
-    var isEnormousMode: Bool {
+    public var isEnormousMode: Bool {
         get {
             guard defaults.object(forKey: enormousModeKey) != nil else { return true }
             return defaults.bool(forKey: enormousModeKey)
@@ -210,12 +217,12 @@ class PriorityManager {
         set { defaults.set(newValue, forKey: enormousModeKey) }
     }
 
-    var isCustomMode: Bool {
+    public var isCustomMode: Bool {
         get { defaults.bool(forKey: customModeKey) }
         set { defaults.set(newValue, forKey: customModeKey) }
     }
 
-    var areDeviceLevelsEnabled: Bool {
+    public var areDeviceLevelsEnabled: Bool {
         get {
             guard defaults.object(forKey: deviceLevelsEnabledKey) != nil else { return true }
             return defaults.bool(forKey: deviceLevelsEnabledKey)
@@ -225,7 +232,7 @@ class PriorityManager {
 
     /// On by default: without it, Mute All cannot promise silence on hardware
     /// that ignores CoreAudio.
-    var redirectMuteAllToBuiltIn: Bool {
+    public var redirectMuteAllToBuiltIn: Bool {
         get {
             guard defaults.object(forKey: redirectMuteAllToBuiltInKey) != nil else { return true }
             return defaults.bool(forKey: redirectMuteAllToBuiltInKey)
@@ -233,12 +240,12 @@ class PriorityManager {
         set { defaults.set(newValue, forKey: redirectMuteAllToBuiltInKey) }
     }
 
-    var keepMutedWhenChangingSelection: Bool {
+    public var keepMutedWhenChangingSelection: Bool {
         get { defaults.bool(forKey: keepMutedWhenChangingSelectionKey) }
         set { defaults.set(newValue, forKey: keepMutedWhenChangingSelectionKey) }
     }
 
-    var keepApplicationInForegroundAfterSourceChange: Bool {
+    public var keepApplicationInForegroundAfterSourceChange: Bool {
         get {
             guard defaults.object(forKey: keepApplicationInForegroundAfterSourceChangeKey) != nil else { return true }
             return defaults.bool(forKey: keepApplicationInForegroundAfterSourceChangeKey)
@@ -246,13 +253,13 @@ class PriorityManager {
         set { defaults.set(newValue, forKey: keepApplicationInForegroundAfterSourceChangeKey) }
     }
 
-    func deviceLevel(for uid: String) -> Float? {
+    public func deviceLevel(for uid: String) -> Float? {
         guard let data = defaults.data(forKey: deviceLevelsKey),
               let levels = try? JSONDecoder().decode([String: Float].self, from: data) else { return nil }
         return levels[uid]
     }
 
-    func saveDeviceLevel(_ level: Float, for uid: String) {
+    public func saveDeviceLevel(_ level: Float, for uid: String) {
         var levels: [String: Float] = [:]
         if let data = defaults.data(forKey: deviceLevelsKey),
            let stored = try? JSONDecoder().decode([String: Float].self, from: data) {
@@ -264,7 +271,7 @@ class PriorityManager {
         }
     }
 
-    func volumeControlPreference(for uid: String) -> VolumeControlPreference {
+    public func volumeControlPreference(for uid: String) -> VolumeControlPreference {
         let preferences = defaults.dictionary(forKey: volumeControlPreferencesKey) as? [String: String] ?? [:]
         guard let raw = preferences[uid], let preference = VolumeControlPreference(rawValue: raw) else {
             return .automatic
@@ -272,7 +279,7 @@ class PriorityManager {
         return preference
     }
 
-    func setVolumeControlPreference(_ preference: VolumeControlPreference, for uid: String) {
+    public func setVolumeControlPreference(_ preference: VolumeControlPreference, for uid: String) {
         var preferences = defaults.dictionary(forKey: volumeControlPreferencesKey) as? [String: String] ?? [:]
         if preference == .automatic {
             preferences.removeValue(forKey: uid)
@@ -284,7 +291,7 @@ class PriorityManager {
 
     // MARK: - Device Categories
 
-    func getCategory(for device: AudioDevice) -> OutputCategory {
+    public func getCategory(for device: AudioDevice) -> OutputCategory {
         let categories = defaults.dictionary(forKey: deviceCategoriesKey) as? [String: String] ?? [:]
         if let raw = categories[device.uid], let category = OutputCategory(rawValue: raw) {
             return category
@@ -296,7 +303,7 @@ class PriorityManager {
         return .speaker
     }
 
-    func setCategory(_ category: OutputCategory, for device: AudioDevice) {
+    public func setCategory(_ category: OutputCategory, for device: AudioDevice) {
         var categories = defaults.dictionary(forKey: deviceCategoriesKey) as? [String: String] ?? [:]
         categories[device.uid] = category.rawValue
         defaults.set(categories, forKey: deviceCategoriesKey)
@@ -306,12 +313,12 @@ class PriorityManager {
 
     private let neverUseKey = "neverUseDevices"
 
-    func isNeverUse(_ device: AudioDevice) -> Bool {
+    public func isNeverUse(_ device: AudioDevice) -> Bool {
         let list = defaults.array(forKey: neverUseKey) as? [String] ?? []
         return list.contains(device.uid)
     }
 
-    func setNeverUse(_ device: AudioDevice, neverUse: Bool) {
+    public func setNeverUse(_ device: AudioDevice, neverUse: Bool) {
         var list = defaults.array(forKey: neverUseKey) as? [String] ?? []
         if neverUse {
             if !list.contains(device.uid) {
@@ -329,19 +336,19 @@ class PriorityManager {
     private let hiddenSpeakersKey = "hiddenSpeakers"
     private let hiddenHeadphonesKey = "hiddenHeadphones"
 
-    func isHidden(_ device: AudioDevice) -> Bool {
+    public func isHidden(_ device: AudioDevice) -> Bool {
         let key = hiddenKey(for: device)
         let hidden = defaults.array(forKey: key) as? [String] ?? []
         return hidden.contains(device.uid)
     }
 
-    func isHidden(_ device: AudioDevice, inCategory category: OutputCategory) -> Bool {
+    public func isHidden(_ device: AudioDevice, inCategory category: OutputCategory) -> Bool {
         let key = category == .speaker ? hiddenSpeakersKey : hiddenHeadphonesKey
         let hidden = defaults.array(forKey: key) as? [String] ?? []
         return hidden.contains(device.uid)
     }
 
-    func hideDevice(_ device: AudioDevice) {
+    public func hideDevice(_ device: AudioDevice) {
         let key = hiddenKey(for: device)
         var hidden = defaults.array(forKey: key) as? [String] ?? []
         if !hidden.contains(device.uid) {
@@ -350,7 +357,7 @@ class PriorityManager {
         }
     }
 
-    func hideDevice(_ device: AudioDevice, inCategory category: OutputCategory) {
+    public func hideDevice(_ device: AudioDevice, inCategory category: OutputCategory) {
         let key = category == .speaker ? hiddenSpeakersKey : hiddenHeadphonesKey
         var hidden = defaults.array(forKey: key) as? [String] ?? []
         if !hidden.contains(device.uid) {
@@ -359,14 +366,14 @@ class PriorityManager {
         }
     }
 
-    func unhideDevice(_ device: AudioDevice) {
+    public func unhideDevice(_ device: AudioDevice) {
         let key = hiddenKey(for: device)
         var hidden = defaults.array(forKey: key) as? [String] ?? []
         hidden.removeAll { $0 == device.uid }
         defaults.set(hidden, forKey: key)
     }
 
-    func unhideDevice(_ device: AudioDevice, fromCategory category: OutputCategory) {
+    public func unhideDevice(_ device: AudioDevice, fromCategory category: OutputCategory) {
         let key = category == .speaker ? hiddenSpeakersKey : hiddenHeadphonesKey
         var hidden = defaults.array(forKey: key) as? [String] ?? []
         hidden.removeAll { $0 == device.uid }
@@ -384,22 +391,22 @@ class PriorityManager {
 
     // MARK: - Priority Management
 
-    func sortByPriority(_ devices: [AudioDevice], type: AudioDeviceType) -> [AudioDevice] {
+    public func sortByPriority(_ devices: [AudioDevice], type: AudioDeviceType) -> [AudioDevice] {
         let key = priorityKey(for: type, category: nil)
         return sortDevices(devices, usingKey: key)
     }
 
-    func sortByPriority(_ devices: [AudioDevice], category: OutputCategory) -> [AudioDevice] {
+    public func sortByPriority(_ devices: [AudioDevice], category: OutputCategory) -> [AudioDevice] {
         let key = priorityKey(for: .output, category: category)
         return sortDevices(devices, usingKey: key)
     }
 
-    func savePriorities(_ devices: [AudioDevice], type: AudioDeviceType) {
+    public func savePriorities(_ devices: [AudioDevice], type: AudioDeviceType) {
         let key = priorityKey(for: type, category: nil)
         savePriorities(devices, key: key)
     }
 
-    func savePriorities(_ devices: [AudioDevice], category: OutputCategory) {
+    public func savePriorities(_ devices: [AudioDevice], category: OutputCategory) {
         let key = priorityKey(for: .output, category: category)
         savePriorities(devices, key: key)
     }
