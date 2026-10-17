@@ -12,13 +12,15 @@ final class SingleInstanceGuard {
 
     private var fileDescriptor: Int32 = -1
 
-    private init() {}
+    private let lockURL: URL
+
+    init(lockURL: URL = FileManager.default.temporaryDirectory.appendingPathComponent("AudioPriorityBar.instance.lock")) {
+        self.lockURL = lockURL
+    }
 
     func acquire() -> Bool {
         guard fileDescriptor == -1 else { return true }
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AudioPriorityBar.instance.lock")
-            .path
+        let path = lockURL.path
         let descriptor = open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         guard descriptor >= 0 else { return false }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
@@ -117,7 +119,8 @@ final class StatusItemController: NSObject, ObservableObject, NSPopoverDelegate 
         super.init()
 
         // Keep this name stable across versions and audio state changes.
-        statusItem.autosaveName = "AudioPriorityBar.main"
+        statusItem.autosaveName = ProcessInfo.processInfo.arguments.contains("--verify-ui")
+            ? "AudioPriorityBar.verify" : "AudioPriorityBar.main"
 
         popover.behavior = .transient
         popover.animates = true
@@ -249,10 +252,15 @@ private struct StatusItemPanel: View {
 
 @main
 struct AudioPriorityBarApp: App {
-    @StateObject private var audioManager: AudioManager
-    @StateObject private var statusItemController: StatusItemController
+    private let audioManager: AudioManager?
+    private let statusItemController: StatusItemController?
 
     init() {
+        if RunContext.isRunningTests {
+            audioManager = nil
+            statusItemController = nil
+            return
+        }
         let verifyUI = ProcessInfo.processInfo.arguments.contains("--verify-ui")
         guard RunContext.isRunningTests || verifyUI || (AppProcess.waitForPreviousInstance() && SingleInstanceGuard.shared.acquire()) else {
             // Another copy already owns the menu-bar slot. Exit quietly so a
@@ -265,11 +273,13 @@ struct AudioPriorityBarApp: App {
         }
         let manager = AudioManager(
             deviceService: verifyUI ? VerifyAudioDeviceService() : AudioDeviceService(),
+            priorityManager: PriorityManager(defaults: verifyUI
+                ? UserDefaults(suiteName: "com.example.AudioPriorityBar.verify.fixture")! : .standard),
             requestMicrophoneAccess: !verifyUI
         )
-        _audioManager = StateObject(wrappedValue: manager)
+        audioManager = manager
         let controller = StatusItemController(audioManager: manager)
-        _statusItemController = StateObject(wrappedValue: controller)
+        statusItemController = controller
         controller.install()
         if verifyUI {
             DispatchQueue.main.async { controller.showVerifyWindow() }
@@ -760,7 +770,7 @@ class AudioManager: ObservableObject {
         isMuteAllActive = areAllOutputsMuted
         setupDeviceChangeListener()
         setupMuteVolumeListener()
-        if requestMicrophoneAccess { requestMicrophoneAccessIfNeeded() }
+        if requestMicrophoneAccess && deviceService is AudioDeviceService { requestMicrophoneAccessIfNeeded() }
         if !isCustomMode {
             applyHighestPriorityInput()
             applyHighestPriorityOutput()

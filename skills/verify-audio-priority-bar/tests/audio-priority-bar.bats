@@ -30,3 +30,9 @@ setup() {
   run grep -F 'testFakeDeviceCanBeReorderedInMenuBarPanel' "$CONTROL"
   [ "$status" -eq 0 ]
 }
+
+@test "production preferences comparator rejects setting and device mutations" {
+  run python3 "$REPO_ROOT/skills/verify-audio-priority-bar/tests/test_preferences.py"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Ran 10 tests"* ]]
+}
