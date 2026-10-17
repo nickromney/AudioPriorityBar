@@ -128,6 +128,31 @@ final class AudioPriorityBarTests: XCTestCase {
             try retainEvidence(XCTUnwrap(bitmap.representation(using: .png, properties: [:])), name: name)
         }
         settle()
+        // A hosted test has no assistive client to activate SwiftUI's accessibility tree.
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = try XCTUnwrap(NSApp.accessibilityAttributeValue(attribute) as? NSNumber)
+        if !previous.boolValue {
+            NSApp.accessibilitySetValue(NSNumber(value: true), forAttribute: attribute)
+        }
+        let enabled = NSApp.accessibilityAttributeValue(attribute) as? NSNumber
+        XCTAssertEqual(enabled?.boolValue, true, "Hosted accessibility must be active before querying controls")
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            let restored = NSApp.accessibilityAttributeValue(attribute) as? NSNumber
+            XCTAssertEqual(restored, previous, "Restore the hosted process's prior accessibility state")
+            do {
+                let state: [String: Any] = [
+                    "before": previous.boolValue,
+                    "during": enabled?.boolValue as Any,
+                    "restored": restored?.boolValue as Any
+                ]
+                try retainEvidence(JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]),
+                                   name: "hosted-accessibility-state.json")
+            } catch {
+                XCTFail("Could not retain hosted accessibility state: \(error)")
+            }
+        }
+        settle()
         let tree = elements(view).map { "\(type(of: $0)): \(label($0) ?? "<no label>") \(String(describing: try? frame($0)))" }.joined(separator: "\n")
         try retainEvidence(Data(tree.utf8), name: "rendered-accessibility-tree.txt")
         try image("rendered-before-lookup.png")
